@@ -93,7 +93,7 @@ While the proxy engine is open-source, managing virtual keys, tracking exact fin
 - 🔁 **Advanced Fallbacks**: Configure complex cascading fallback trees across 5+ different AI providers (Anthropic -> OpenAI -> DeepSeek).
 - ☁️ **Fully Hosted Proxy**: No Docker, no Redis scaling, no ONNX RAM management. Change your `base_url` to our edge network and start saving instantly.
 
-👉 **[Sign up for the Waitlist at OptiToken.io](https://optitoken.io)**
+👉 **[Sign up for the Waitlist at -soon**
 
 ---
 
