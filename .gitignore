@@ -1,0 +1,36 @@
+# SaaS and Proprietary Code
+dashboard/
+dashboard_old/
+extension/
+
+# Logs and Scratch
+.system_generated/
+scratch/
+
+# Env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Node
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Docker and OS
+.DS_Store
+*.pem
+
+# Go build outputs
+proxy/proxy-server
+
+# Go Workspace
+go.work
+go.work.sum
+
+# Temporary files
+*.log
