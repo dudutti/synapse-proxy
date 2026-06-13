@@ -3,6 +3,14 @@ dashboard/
 dashboard_old/
 extension/
 
+# Marketing and Internal Docs
+social_posts.md
+video_prompts.md
+video_script.md
+video_scripts_v2.md
+LAUNCH_KIT.md
+USE_CASES.md
+
 # Logs and Scratch
 .system_generated/
 scratch/
