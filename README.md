@@ -14,7 +14,7 @@
 
 ## ⚡ What is OptiToken?
 
-OptiToken is an ultra-fast, intelligent reverse-proxy written in **Go**. It sits between your application and your LLM provider (OpenAI, Anthropic, DeepSeek, Minimax, etc.) to **reduce latency and significantly slash API costs (up to 50-80%)**.
+OptiToken is an ultra-fast, intelligent reverse-proxy written in **Go**. It sits between your application and your LLM provider (OpenAI, Anthropic, DeepSeek, Minimax, etc.) to **reduce latency and significantly slash API costs (up to 10-20% on agentic)**.
 
 Instead of routing every single prompt to the LLM, OptiToken evaluates it using a 4-tier pipeline. If the user asks a question that is **semantically identical** to a previous question (even if phrased slightly differently or in another language), OptiToken serves the response directly from its Redis cache in under `2ms`.
 
