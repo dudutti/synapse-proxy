@@ -67,7 +67,7 @@ func CompressPayload(payload []byte) ([]byte, error) {
 			
 			if name == lastToolName && name != "" {
 				consecutiveToolCount++
-				if consecutiveToolCount > 2 {
+				if consecutiveToolCount > 2 && !isRecentMessage {
 					msg["content"] = `{"status": "compacted_repeated_tool"}`
 				}
 			} else {
