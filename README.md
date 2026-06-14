@@ -93,7 +93,7 @@ While the proxy engine is open-source and runs securely on your own servers, obs
 - 🛠️ **Side-by-Side Playground**: Visually A/B test your agent's prompts against the Direct API vs OptiToken cache to see the latency drop in real-time.
 - 🔁 **Advanced Routing Rules**: Configure complex cascading fallback trees across 5+ different AI providers (Anthropic -> OpenAI -> Local Ollama).
 
-👉 **[Sign up for the Waitlist at -soon]**
+👉 **[Sign up for the Waitlist at -(https://optitoken.net)]**
 
 ---
 
