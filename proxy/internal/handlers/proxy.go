@@ -309,7 +309,15 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 	truePromptTokens, completionTokens := utils.ExtractUsage(cacheableResponse)
 	
 	if truePromptTokens > 0 {
+		// Calculate ratio of actual billed tokens vs our tiktoken estimation
+		// To safely adjust promptOrig for L3 compression without apples-to-oranges comparison.
+		if cacheLvl == "L3" && promptOpt > 0 {
+			ratio := float64(truePromptTokens) / float64(promptOpt)
+			promptOrig = int(float64(promptOrig) * ratio)
+		}
+
 		promptOpt = truePromptTokens
+
 		// If no optimization was applied (Standard Routing), the original tokens 
 		// should match exactly what the provider billed, to avoid false "savings" anomalies.
 		if cacheLvl == "NONE" {
