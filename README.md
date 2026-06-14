@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="https://via.placeholder.com/150x150.png?text=OptiToken" alt="OptiToken Logo" width="120" />
+  <img src="https://optitoken.net/logo01.png?text=OptiToken" alt="OptiToken Logo" width="120" />
   <h1>OptiToken Proxy</h1>
   <p><strong>The Enterprise API Gateway for Autonomous Agents (OpenAI, Anthropic, Gemini)</strong></p>
   
