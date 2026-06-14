@@ -44,6 +44,8 @@ OptiToken operates using a localized **Redis Stack** with Vector Search (`RedisS
 4. **L3 Compression**: If missed, structurally compresses the agent's prompt and forwards it to the LLM.
 5. **Streaming**: Responses stream back to the client transparently while asynchronously tracking observability data.
 
+📚 **Deep Dive**: Learn exactly how our high-performance observability engine works without blocking requests in our [Telemetry Architecture Guide](./docs/TELEMETRY.md).
+
 ---
 
 ## 🚀 Getting Started (Self-Hosted for Enterprise Compliance)
