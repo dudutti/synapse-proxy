@@ -27,6 +27,7 @@ func main() {
 	// 4. Start Background Workers
 	go workers.ConsumeTelemetryWorker()
 	go workers.ConsumeBenchmarkWorker()
+	go workers.GlobalStatsWorker() // Aggregates global stats into Redis every 5min (public login page)
 
 	// 5. Mount Routes
 	http.HandleFunc("/v1/chat/completions", handlers.ProxyHandler)
