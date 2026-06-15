@@ -31,6 +31,7 @@ func main() {
 	// 5. Mount Routes
 	http.HandleFunc("/v1/chat/completions", handlers.ProxyHandler)
 	http.HandleFunc("/v1/cache/purge", handlers.CachePurgeHandler)
+	http.HandleFunc("/v1/providers/models", handlers.FetchModelsHandler)
 
 	// 6. Start Server
 	fmt.Println("OptiToken Data Plane listening on :8080...")

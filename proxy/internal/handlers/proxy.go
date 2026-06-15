@@ -42,7 +42,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	authHeader := "Bearer " + virtualKey
-	_, realKey, provider, fallbackKey, fallbackProvider, isBenchmark, semanticTolerance, cacheTtl, defaultModel, isolateCache, err := services.ValidateVirtualKey(ctx, authHeader)
+	_, realKey, provider, fallbackKey, fallbackProvider, _, isBenchmark, semanticTolerance, cacheTtl, defaultModel, isolateCache, err := services.ValidateVirtualKey(ctx, authHeader)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
@@ -90,7 +90,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 				w.Write(optResult.HitResponse)
 			}
 			
-			go workers.PushTelemetry(virtualKey, provider, reqModel, optResult.PromptTokensOrig, completionTokens, optResult.PromptTokensOpt, 0, optResult.CacheHitLevel, time.Since(startTime))
+			go workers.PushTelemetry(virtualKey, provider, reqModel, optResult.PromptTokensOrig, completionTokens, optResult.PromptTokensOpt, 0, optResult.CacheHitLevel, time.Since(startTime), string(bodyBytes), string(optResult.Payload))
 			
 			if isBenchmark {
 				go runBenchmarkEvaluation(virtualKey, realKey, provider, reqModel, defaultModel, bodyBytes, optResult.Payload, optResult.HitResponse, time.Since(startTime), 0, 0)
@@ -328,7 +328,7 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 	completionOrig := completionTokens
 	completionOpt := completionTokens
 
-	go workers.PushTelemetry(vk, provider, model, promptOrig, completionOrig, promptOpt, completionOpt, cacheLvl, time.Since(startTime))
+	go workers.PushTelemetry(vk, provider, model, promptOrig, completionOrig, promptOpt, completionOpt, cacheLvl, time.Since(startTime), string(rawPayload), string(optPayload))
 
 	if isBenchmark {
 		go runBenchmarkEvaluation(vk, realKey, provider, model, defaultModel, rawPayload, optPayload, cacheableResponse, time.Since(startTime), promptOpt, completionOpt)
