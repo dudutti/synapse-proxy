@@ -1,12 +1,14 @@
 <div align="center">
   <img src="https://optitoken.net/logo01.png?text=OptiToken" alt="OptiToken Logo" width="120" />
   <h1>OptiToken Proxy</h1>
-  <p><strong>The Enterprise API Gateway for Autonomous Agents (OpenAI, Anthropic, Gemini)</strong></p>
+  <p><strong>The Enterprise API Gateway for Autonomous Agents (OpenAI, Anthropic, Gemini, MiniMax...)</strong></p>
   
   <p>
-    <a href="https://optitoken.io"><img src="https://img.shields.io/badge/SaaS_Dashboard-Available-emerald?style=for-the-badge" alt="Enterprise SaaS"/></a>
+    <a href="https://optitoken.net"><img src="https://img.shields.io/badge/Live_Dashboard-optitoken.net-emerald?style=for-the-badge" alt="Enterprise SaaS"/></a>
     <img src="https://img.shields.io/badge/Go-1.21-00ADD8?style=for-the-badge&logo=go" alt="Go Version"/>
     <img src="https://img.shields.io/badge/Redis-Stack-DC382D?style=for-the-badge&logo=redis" alt="Redis Stack"/>
+    <img src="https://img.shields.io/badge/GDPR-Ready-4CAF50?style=for-the-badge" alt="GDPR"/>
+    <img src="https://img.shields.io/badge/Data_Residency-EU%20🇪🇺-blue?style=for-the-badge" alt="EU Data Residency"/>
   </p>
 </div>
 
@@ -14,7 +16,7 @@
 
 ## ⚡ What is OptiToken?
 
-OptiToken is an ultra-fast, intelligent reverse-proxy written in **Go**. It sits between your application and your LLM provider (OpenAI, Anthropic, DeepSeek, Minimax, etc.) to give you **total observability, control, and optimization over your Autonomous Agents' traffic**.
+OptiToken is an ultra-fast, intelligent reverse-proxy written in **Go**. It sits between your application and your LLM provider (OpenAI, Anthropic, DeepSeek, MiniMax, etc.) to give you **total observability, control, and optimization over your Autonomous Agents' traffic**.
 
 If you are running Agentic workflows (Devin, AutoGPT, Hermes, LangChain), you know that agents generate massive, repetitive, and noisy traffic. OptiToken intercepts this traffic, logs it in real-time, and aggressively prunes redundant context before it hits the provider.
 
@@ -26,11 +28,73 @@ If you are running Agentic workflows (Devin, AutoGPT, Hermes, LangChain), you kn
 - ⚡ **Exact Matching (L1)**: Instant zero-cost responses for identical payloads using fast xxHash indexing.
 - 🗜️ **Structural Compression (L3)**: Built specifically for agents. If there's a cache miss, OptiToken automatically strips redundant whitespace, prunes stale Chain-of-Thought (`<thought>`) logs, and minifies huge JSON tool outputs before sending.
 - 🔄 **Smart Provider Routing**: Automatically routes simple tasks to cheaper/local models and complex tasks to heavy models.
+- 🔒 **Zero-Log Mode**: Per-key privacy option. When enabled, prompt and response *content* is **never written to disk, never stored in cache** — only token counts, latency and cost metrics are recorded. Fully auditable. For clients who need maximum data confidentiality without sacrificing observability.
 
 ### 🤖 Real-World Agent Benchmarks
 We benchmarked OptiToken on live Agentic workflows (Hermes) building complete web apps from scratch. Here is what OptiToken achieved:
 - **Orbital Dashboard:** The agent built a complex Next.js dashboard, looping through the codebase structure multiple times. OptiToken observed the loops, intercepted the redundant context, and safely pruned **+1,000,000 tokens** in a single session.
 - **CollabBoard Kanban (From Scratch):** Building a React & Node.js WebSocket Kanban board entirely from scratch. Since the code was completely new, the structural L3 Payload Compression alone pruned **511,000 tokens** out of a 6M token session.
+
+---
+
+## 🔐 Security & Privacy Architecture
+
+We take data security seriously. Here is exactly what we do — and what we don't do — with your data.
+
+### What we guarantee
+
+| Protection | Status | Details |
+|---|---|---|
+| **Encryption in transit** | ✅ Always on | All traffic is encrypted via HTTPS/TLS (Caddy automatic certificate management) |
+| **Encryption at rest** | ✅ Always on | PostgreSQL data is encrypted at the storage level |
+| **API Keys never stored in clear** | ✅ Always on | Your real provider API keys are encrypted with AES-256-CBC before being written to the database. They are only decrypted in-memory at request time. |
+| **Multi-Tenant Cache Isolation** | ✅ Always on | Each virtual key has a completely isolated cache namespace. Zero risk of one client reading another client's data. |
+| **EU Data Residency** | ✅ Always on | All servers run on Hetzner (Frankfurt, Germany 🇩🇪). Your data never leaves the EU. |
+| **Zero-Log Mode** | ✅ Per-key option | When activated, the proxy only records token counts and latency — the content of prompts and responses is **never written to disk, never cached, never indexed**. Verifiable in the open-source code. |
+
+### What is technically impossible (and why we are honest about it)
+
+**End-to-End Encryption (E2E) is architecturally impossible for a proxy.** To perform semantic caching, context compression, and to forward your request to OpenAI/Anthropic, the proxy *must* be able to read the plaintext prompt. If the payload were encrypted, the proxy could not process it and neither could the AI provider. This is a fundamental constraint of every AI proxy on the market — including LiteLLM, PortKey, and Helicone. We are transparent about it.
+
+What we offer instead is **Operational Confidentiality**: your data never leaves our EU servers, is encrypted at every storage layer, and can be configured to never be persisted at all with **Zero-Log Mode**.
+
+---
+
+## 🔕 Zero-Log Mode — Maximum Privacy for Sensitive Workloads
+
+Zero-Log Mode is a **per-virtual-key privacy flag** you can toggle directly from the OptiToken dashboard. It is designed for teams building on sensitive data — healthcare, legal, finance, government — who need the benefits of an AI gateway (cost control, routing, observability) **without any content ever leaving an audit trail**.
+
+### What happens when Zero-Log Mode is ON?
+
+| Data Type | Normal Mode | Zero-Log Mode |
+|---|---|---|
+| **Prompt content** | ✅ Stored & indexed | 🚫 Never written |
+| **Response content** | ✅ Stored & indexed | 🚫 Never written |
+| **Tool call payloads** | ✅ Stored | 🚫 Never written |
+| **Semantic cache** | ✅ Active (vector stored) | 🚫 Disabled (no vector stored) |
+| **Token count** | ✅ Recorded | ✅ Recorded |
+| **Latency / Cost** | ✅ Recorded | ✅ Recorded |
+| **Provider / Model** | ✅ Recorded | ✅ Recorded |
+
+### How to activate it
+
+**Via the OptiToken Dashboard** — toggle the `Zero-Log` switch on any virtual key:
+```
+Settings → Virtual Keys → [your key] → Privacy → Enable Zero-Log Mode
+```
+
+**Via the API** (for programmatic key provisioning):
+```bash
+curl -X PATCH https://api.optitoken.net/v1/keys/sk-opti-xxxx \
+  -H "Authorization: Bearer your-admin-token" \
+  -d '{"zero_log": true}'
+```
+
+### Why it matters
+
+Every competitor proxy (LiteLLM, PortKey, Helicone) logs your prompts by default. With OptiToken, **Zero-Log Mode is a first-class, auditable feature built into the core proxy** — not a paid add-on. Since the proxy is open-source, you can verify in the source code exactly where the content bypass logic lives.
+
+> **HIPAA / GDPR / SOC2 use-cases**: Zero-Log Mode, combined with Self-Hosting and EU Data Residency, gives your compliance team the strongest possible privacy posture for AI workloads.
 
 ---
 
@@ -40,7 +104,7 @@ OptiToken operates using a localized **Redis Stack** with Vector Search (`RedisS
 
 1. **Request Received**: The Go proxy intercepts standard `/v1/chat/completions` API calls.
 2. **L1 Cache (Hash)**: Checks for an exact payload match.
-3. **L2 Cache (Semantic)**: Extracts the text, runs it through the local Python/ONNX embedding service, and searches Redis for vectors with a Cosine Distance below the configured tolerance.
+3. **L2 Cache (Semantic)**: Extracts the text, runs it through the local ONNX embedding service, and searches Redis for vectors with a Cosine Distance below the configured tolerance.
 4. **L3 Compression**: If missed, structurally compresses the agent's prompt and forwards it to the LLM.
 5. **Streaming**: Responses stream back to the client transparently while asynchronously tracking observability data.
 
@@ -53,7 +117,7 @@ OptiToken operates using a localized **Redis Stack** with Vector Search (`RedisS
 We know you can't send your proprietary source code to a random Cloud Proxy. That's why OptiToken's engine is entirely **Open-Source and Self-Hosted**.
 
 ```bash
-git clone https://github.com/your-org/optitoken.git
+git clone https://github.com/dudutti/optitoken.git
 cd optitoken
 
 # Start the Redis Stack, ONNX Embedder, and Go Proxy
@@ -84,7 +148,7 @@ response = client.chat.completions.create(
 
 While the proxy engine is open-source and runs securely on your own servers, observing the data requires a robust frontend.
 
-**OptiToken Enterprise** is our SaaS Dashboard that connects securely to your Self-Hosted Proxy.
+**OptiToken Enterprise** is our SaaS Dashboard, live at [optitoken.net](https://optitoken.net).
 
 ### Why use the Enterprise Dashboard?
 
@@ -92,8 +156,9 @@ While the proxy engine is open-source and runs securely on your own servers, obs
 - 🔑 **Virtual Key Management**: Issue revocable `sk-opti-...` keys to different agent teams without exposing your real OpenAI API keys.
 - 🛠️ **Side-by-Side Playground**: Visually A/B test your agent's prompts against the Direct API vs OptiToken cache to see the latency drop in real-time.
 - 🔁 **Advanced Routing Rules**: Configure complex cascading fallback trees across 5+ different AI providers (Anthropic -> OpenAI -> Local Ollama).
+- 🔒 **Zero-Log Mode Toggle**: Activate per-key content privacy directly from the dashboard. Prompt and response content is **never written to disk, never cached, never indexed** — only cost and performance metrics are kept.
 
-👉 **[Sign up for the Waitlist at -(https://optitoken.net)]**
+👉 **[Sign up for the Waitlist at optitoken.net](https://optitoken.net)**
 
 ---
 
@@ -104,3 +169,4 @@ We welcome contributions! Please see our `CONTRIBUTING.md` for details on how to
 ## 📄 License
 
 The OptiToken Proxy is open-sourced under the MIT License. The Enterprise Dashboard is proprietary.
+
