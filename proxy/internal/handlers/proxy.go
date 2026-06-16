@@ -190,9 +190,13 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// the same tool call in a tight loop.
 	loopResult := optiagent.DetectLoop(ctx, rdb, virtualKey, optResult.PayloadHash)
 	if loopResult.IsLoop {
+		hashPrefix := optResult.PayloadHash
+		if len(hashPrefix) > 12 {
+			hashPrefix = hashPrefix[:12]
+		}
 		log.Printf("[ProxyHandler] Loop detected: count=%d/%d in %ds (hash=%s) model=%s",
 			loopResult.LoopCount, optiagent.LOOP_THRESHOLD, loopResult.WindowSecs,
-			optResult.PayloadHash[:12], reqModel)
+			hashPrefix, reqModel)
 	}
 	if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 		log.Printf("[ProxyHandler] LOOP HIT (count=%d) — serving cached response instead of upstream", loopResult.LoopCount)
@@ -483,7 +487,11 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 		// upstream provider still has the response (we just don't
 		// keep it on our side).
 		if zeroLog {
-			log.Printf("[streamResponse] Zero-Log Mode: skipping L1/L2/loop cache for vk=%s hash=%s", vk, payloadHash[:12])
+			hashPrefix := payloadHash
+			if len(hashPrefix) > 12 {
+				hashPrefix = hashPrefix[:12]
+			}
+			log.Printf("[streamResponse] Zero-Log Mode: skipping L1/L2/loop cache for vk=%s hash=%s", vk, hashPrefix)
 		} else {
 			rdb.Set(ctx, l1Key, cacheableResponse, ttl)
 

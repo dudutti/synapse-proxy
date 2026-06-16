@@ -15,8 +15,13 @@ services:
   redis:
     image: redis/redis-stack-server:latest
     container_name: optitoken-redis
+    # IMPORTANT: use `redis-stack-server` (NOT plain `redis-server`).
+    # The redis-stack-server binary is the one that loads the RediSearch
+    # module on startup, which we need for the L2 semantic cache
+    # (`FT.SEARCH idx:l2cache ...`). Plain `redis-server` would silently
+    # load no module and break L2.
     command:
-      - redis-server
+      - redis-stack-server
       - --maxmemory
       - 512mb
       - --maxmemory-policy
