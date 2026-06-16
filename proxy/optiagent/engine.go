@@ -77,11 +77,11 @@ func extractTextForEmbedding(payload []byte) (string, bool, bool) {
 			}
 		}
 
-		// If there are multiple non-system messages, it's a multi-turn conversation.
-		// Semantic caching on full chat histories is dangerous because the vast context
-		// dilutes the embedding of the newest message, causing false positive cache hits.
-		// We disable L2 cache for multi-turn conversations.
-		disableL2 := nonSystemCount > 1
+		// Multi-turn is no longer disabled. The L2 cache now embeds only
+		// the LAST user message (see extractTextForEmbedding above), not
+		// the whole chat history, so multi-turn chats get accurate
+		// semantic matching on the actual question being asked.
+		disableL2 := false
 
 		return strings.TrimSpace(text), hasImage, disableL2
 	}
