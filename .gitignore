@@ -48,6 +48,9 @@ go.work.sum
 # Temporary files
 *.log
 
+# Local cache / build artifacts
+proxy/cache/
+
 # Tests / dev scratch
 test_redis.go
 test_vss.go
