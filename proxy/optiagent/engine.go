@@ -138,13 +138,12 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 			var onnxRes struct {
 				Vector []float32 `json:"vector"`
 			}
-			if json.NewDecoder(resp.Body).Decode(&onnxRes) == nil {
+			if json.NewDecoder(resp.Body).Decode(&onnxRes) == nil && len(onnxRes.Vector) > 0 {
 				payloadVector = onnxRes.Vector
-				
+
 				// Convert float32 array to byte array for Redis
 				buf := new(bytes.Buffer)
-				err := binary.Write(buf, binary.LittleEndian, onnxRes.Vector)
-				if err == nil {
+				if err := binary.Write(buf, binary.LittleEndian, onnxRes.Vector); err == nil {
 					vectorBytes := buf.Bytes()
 
 					// Escape special chars in virtualKey for Redis TAG filter
@@ -153,7 +152,7 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 					// Search Redis VSS filtered by user's virtual key
 					query := "(@vk:{" + escapedVK + "})=>[KNN 1 @vector $query_vec AS score]"
 					res, err := rdb.Do(ctx, "FT.SEARCH", "idx:l2cache", query, "PARAMS", "2", "query_vec", vectorBytes, "RETURN", "2", "score", "response", "DIALECT", "2").Result()
-					
+
 					if err == nil {
 						resArr := res.([]interface{})
 						// FT.SEARCH returns [number_of_results, doc_id, [fields]]
@@ -173,13 +172,13 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 							// If Cosine Distance < semanticTolerance (e.g. 0.15 = Similarity > 85%)
 							if score < semanticTolerance && hitResponse != "" {
 								return OptimizationResult{
-									Payload:         payload,
-									PayloadHash:     hashStr,
-									Vector:          payloadVector,
-									CacheHitLevel:   "L2",
+									Payload:          payload,
+									PayloadHash:      hashStr,
+									Vector:           payloadVector,
+									CacheHitLevel:    "L2",
 									PromptTokensOrig: origTokens,
 									PromptTokensOpt:  0,
-									HitResponse:     []byte(hitResponse),
+									HitResponse:      []byte(hitResponse),
 								}, nil
 							}
 						}

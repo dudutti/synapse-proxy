@@ -1,0 +1,16 @@
+:80 {
+    # HTTP server (default for local dev).
+    # For HTTPS with Let's Encrypt, replace ":80" with the domain (e.g. "optitoken.net").
+
+    route {
+        # /v1/* -> proxy Go (LLM gateway)
+        handle /v1/* {
+            reverse_proxy proxy:8080
+        }
+
+        # everything else -> dashboard Next.js
+        handle /* {
+            reverse_proxy dashboard:3000
+        }
+    }
+}

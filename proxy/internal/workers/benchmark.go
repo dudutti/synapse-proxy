@@ -62,9 +62,9 @@ func ConsumeBenchmarkWorker() {
 			completionOrig := utils.CountTokens(origResp)
 
 			// Parse real usage if present in the unoptimized response
-			pOrig, cOrig := utils.ExtractUsage([]byte(origResp))
-			if pOrig > 0 { promptOrig = pOrig }
-			if cOrig > 0 { completionOrig = cOrig }
+			unoptUsage := utils.ExtractUsage([]byte(origResp))
+			if unoptUsage.PromptTokens > 0 { promptOrig = unoptUsage.PromptTokens }
+			if unoptUsage.CompletionTokens > 0 { completionOrig = unoptUsage.CompletionTokens }
 
 			promptOpt := 0
 			if po, ok := msg.Values["opt_prompt_tokens"]; ok {

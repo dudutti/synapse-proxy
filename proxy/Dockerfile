@@ -9,7 +9,7 @@ COPY . .
 RUN go mod tidy
 
 # Build the proxy binary
-RUN go build -o proxy-server ./cmd/server/main.go
+RUN go build -o proxy-server ./cmd/server/main.go && chmod +x proxy-server
 
 # Expose proxy port
 EXPOSE 8080

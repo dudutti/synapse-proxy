@@ -59,6 +59,21 @@ func CompressPayload(payload []byte) ([]byte, error) {
 			msg["content"] = thoughtRegex.ReplaceAllString(contentStr, "[Pruned Thought Process]")
 		}
 
+		// 1b. Strip reasoning_content from previous assistant turns.
+		// Thinking models (DeepSeek-R1, MiniMax M3, Qwen QwQ, Gemma) return
+		// reasoning as a sibling field of content. Clients re-send the whole
+		// assistant turn as input context, which is pure waste — observed
+		// at 89% of input tokens on agentic workloads. Only prune turns that
+		// are not the most recent assistant message.
+		if role == "assistant" && !isRecentMessage {
+			if _, hasReasoning := msg["reasoning_content"]; hasReasoning {
+				delete(msg, "reasoning_content")
+			}
+			if _, hasReasoning := msg["reasoning"]; hasReasoning {
+				delete(msg, "reasoning")
+			}
+		}
+
 		// 2. OpenClaw / Stale Tool Compaction
 		if role == "tool" || role == "function" {
 			if !isRecentMessage && hasContent && len(contentStr) > 200 {

@@ -21,10 +21,13 @@ func main() {
 	db.InitRedis()
 	db.InitPostgres()
 
-	// 3. Setup Redis Vector Index
+	// 3. Run idempotent schema migrations (called once, not from worker loops)
+	workers.RunTelemetryMigrations()
+
+	// 4. Setup Redis Vector Index
 	go db.InitRedisIndex()
 
-	// 4. Start Background Workers
+	// 5. Start Background Workers
 	go workers.ConsumeTelemetryWorker()
 	go workers.ConsumeBenchmarkWorker()
 	go workers.GlobalStatsWorker() // Aggregates global stats into Redis every 5min (public login page)

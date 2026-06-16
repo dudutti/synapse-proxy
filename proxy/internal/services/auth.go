@@ -10,17 +10,17 @@ import (
 )
 
 // ValidateVirtualKey checks the Authorization header and fetches the virtual key config from Redis
-func ValidateVirtualKey(ctx context.Context, authHeader string) (string, string, string, string, string, string, bool, float64, int, string, bool, error) {
+func ValidateVirtualKey(ctx context.Context, authHeader string) (string, string, string, string, string, string, bool, float64, int, string, bool, bool, error) {
 	if !strings.HasPrefix(authHeader, "Bearer sk-opti-") {
-		return "", "", "", "", "", "", false, 0, 0, "", false, fmt.Errorf("invalid authorization header")
+		return "", "", "", "", "", "", false, 0, 0, "", false, false, fmt.Errorf("invalid authorization header")
 	}
 
 	virtualKey := strings.TrimPrefix(authHeader, "Bearer ")
 	rdb := db.GetRedis()
-	
+
 	val, err := rdb.HGetAll(ctx, "optitoken:keys:"+virtualKey).Result()
 	if err != nil || len(val) == 0 {
-		return "", "", "", "", "", "", false, 0, 0, "", false, fmt.Errorf("invalid api key")
+		return "", "", "", "", "", "", false, 0, 0, "", false, false, fmt.Errorf("invalid api key")
 	}
 
 	semanticTolerance := 0.15
@@ -39,8 +39,9 @@ func ValidateVirtualKey(ctx context.Context, authHeader string) (string, string,
 
 	isBenchmark := val["benchmark_mode"] == "true"
 	isolateCache := val["isolate_cache_by_user"] == "true"
+	zeroLog := val["zero_log"] == "true"
 	defaultModel := val["default_model"] // Empty string if not set
 	fallbackModel := val["fallback_model"] // Empty string if not set
 
-	return virtualKey, val["real_key"], val["provider"], val["fallback_key"], val["fallback_provider"], fallbackModel, isBenchmark, semanticTolerance, cacheTtl, defaultModel, isolateCache, nil
+	return virtualKey, val["real_key"], val["provider"], val["fallback_key"], val["fallback_provider"], fallbackModel, isBenchmark, semanticTolerance, cacheTtl, defaultModel, isolateCache, zeroLog, nil
 }

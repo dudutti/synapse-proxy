@@ -11,7 +11,6 @@ import (
 	"log"
 	"net/http"
 	"os"
-	"regexp"
 	"strings"
 	"time"
 
@@ -42,7 +41,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	authHeader := "Bearer " + virtualKey
-	_, realKey, provider, fallbackKey, fallbackProvider, _, isBenchmark, semanticTolerance, cacheTtl, defaultModel, isolateCache, err := services.ValidateVirtualKey(ctx, authHeader)
+	_, realKey, provider, fallbackKey, fallbackProvider, _, isBenchmark, semanticTolerance, cacheTtl, defaultModel, isolateCache, zeroLog, err := services.ValidateVirtualKey(ctx, authHeader)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
@@ -52,6 +51,18 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		http.Error(w, "Failed to read request body", http.StatusBadRequest)
 		return
+	}
+
+	// Zero-Log Mode: under this flag, the proxy never persists the
+	// prompt or response content anywhere (cache, DB, telemetry,
+	// Model Radar samples). We still forward the request to the
+	// upstream provider so the user gets their answer — we just
+	// don't keep the content on our side.
+	//
+	// We re-parse the body first so subsequent code (DetectAgent,
+	// ProcessRequest, cache, telemetry) sees the redacted bytes.
+	if zeroLog {
+		bodyBytes = utils.RedactJSONBody(bodyBytes)
 	}
 
 	reqModel := "unknown"
@@ -66,12 +77,61 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Detect originating agent (Hermes, OpenClaw, ...) and session id
+	// from request headers + body. The proxy does not require any client
+	// cooperation — it infers everything heuristically.
+	agentSig := utils.DetectAgent(utils.AgentDetectionInput{
+		Headers:    r.Header,
+		Body:       bodyBytes,
+		BodyParsed: payloadMap,
+	})
+	sessionID := utils.ExtractSessionID(r.Header, payloadMap)
+	log.Printf("[ProxyHandler] agent=%s (%s, conf=%.2f) session=%q", agentSig.ID, agentSig.Source, agentSig.Confidence, sessionID)
+
 	isBypassStr := r.Header.Get("X-Bypass-Cache")
 	isBypass := isBypassStr == "true"
 	log.Printf("[ProxyHandler] Received X-Bypass-Cache: %q -> isBypass: %v", isBypassStr, isBypass)
-	
+
 	var optResult optiagent.OptimizationResult
 	rdb := db.GetRedis()
+
+	// Feature 3: Compaction hint — inject a system note so the agent
+	// knows that previous tool outputs may have been summarized. Only
+	// on the first turn of a session (or whenever the body has not
+	// already been mutated by us).
+	if !wantStream {
+		hinted := optiagent.InjectCompactionHint(bodyBytes)
+		if len(hinted) > 0 && string(hinted) != string(bodyBytes) {
+			bodyBytes = hinted
+			// re-parse so subsequent code sees the new model field if any
+			var reMap map[string]interface{}
+			if err := json.Unmarshal(bodyBytes, &reMap); err == nil {
+				payloadMap = reMap
+				if m, ok := reMap["model"].(string); ok && m != "" {
+					reqModel = m
+				}
+			}
+		}
+	}
+
+	// Feature 2: Tool-call dedup. We extract the file paths the agent is
+	// about to read and check whether the same file was read recently.
+	// The hit is logged for telemetry; full body-rewriting is left to
+	// future work since it requires tool-output mapping in the messages
+	// array.
+	toolCalls := optiagent.ExtractToolCalls(bodyBytes)
+	if len(toolCalls) > 0 {
+		toolDedupTTL := 5 * time.Minute
+		toolDedup := optiagent.CheckToolDedup(ctx, rdb, virtualKey, toolCalls, bodyBytes, toolDedupTTL)
+		if toolDedup.HasDup {
+			log.Printf("[ProxyHandler] TOOL DEDUP HIT: %s re-read of %q (cached body %d bytes)",
+				toolDedup.ToolName, toolDedup.FilePath, len(toolDedup.ReuseBody))
+		}
+	}
+
+	// Model Radar: flag the requested model so we can collect samples if
+	// the upstream returns a usage block we don't recognize.
+	isNewModel := workers.CheckAndFlagNewModel(ctx, rdb, provider, reqModel)
 
 	if !isBypass {
 		optResult, err = optiagent.ProcessRequest(ctx, rdb, bodyBytes, semanticTolerance, virtualKey, isolateCache)
@@ -81,30 +141,79 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if optResult.CacheHitLevel == "L1" || optResult.CacheHitLevel == "L2" {
-			_, completionTokens := utils.ExtractUsage(optResult.HitResponse)
-
-			if wantStream {
-				streamCachedResponse(w, optResult.HitResponse, reqModel)
+			// Safety net: if the cached payload is an upstream error (e.g. a
+			// model was renamed, a key was rotated, or the wrong provider was
+			// targeted), do NOT replay it. Drop the cache entry and fall
+			// through to a fresh upstream call.
+			if utils.IsCachedResponseAnError(optResult.HitResponse) {
+				log.Printf("[ProxyHandler] Cached %s response looks like an error, invalidating and falling through (model=%s)", optResult.CacheHitLevel, reqModel)
+				// Invalidate BOTH the L1 and L2 cache entries for this
+				// (vk, payload) so the next request actually re-hits upstream.
+				l1Key := "optitoken:l1cache:" + virtualKey + ":" + optResult.PayloadHash
+				l2Key := "optitoken:l2cache:" + virtualKey + ":" + optResult.PayloadHash
+				_ = rdb.Del(ctx, l1Key, l2Key).Err()
+				optResult.CacheHitLevel = "NONE"
+				// continue to upstream execution below
 			} else {
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(optResult.HitResponse)
+				cachedUsage := utils.ExtractUsage(optResult.HitResponse)
+				// Re-stamp the response so the client sees the model name
+				// it requested, even if the cached payload was originally
+				// produced under a different name (model aliasing).
+				restamped := utils.RestampModel(optResult.HitResponse, reqModel)
+				if wantStream {
+					streamCachedResponse(w, restamped, reqModel)
+				} else {
+					w.Header().Set("Content-Type", "application/json")
+					w.Write(restamped)
+				}
+
+				go workers.PushTelemetry(virtualKey, provider, reqModel, optResult.PromptTokensOrig, cachedUsage.CompletionTokens, optResult.PromptTokensOpt, 0, cachedUsage.ReasoningTokens, optResult.CacheHitLevel, time.Since(startTime), string(bodyBytes), string(optResult.Payload), cachedUsage.CacheCreationTokens, cachedUsage.CacheReadTokens, cachedUsage.CacheHitTokens, cachedUsage.CacheMissTokens, agentSig.ID, agentSig.Label, sessionID, zeroLog)
+
+				if isBenchmark {
+					go runBenchmarkEvaluation(virtualKey, realKey, provider, reqModel, defaultModel, bodyBytes, optResult.Payload, optResult.HitResponse, time.Since(startTime), 0, 0)
+				}
+				return
 			}
-			
-			go workers.PushTelemetry(virtualKey, provider, reqModel, optResult.PromptTokensOrig, completionTokens, optResult.PromptTokensOpt, 0, optResult.CacheHitLevel, time.Since(startTime), string(bodyBytes), string(optResult.Payload))
-			
-			if isBenchmark {
-				go runBenchmarkEvaluation(virtualKey, realKey, provider, reqModel, defaultModel, bodyBytes, optResult.Payload, optResult.HitResponse, time.Since(startTime), 0, 0)
-			}
-			return
 		}
 	} else {
 		optResult = optiagent.OptimizationResult{
 			Payload: bodyBytes,
-			PromptTokensOrig: utils.CountTokens(string(bodyBytes)), 
+			PromptTokensOrig: utils.CountTokens(string(bodyBytes)),
 			PromptTokensOpt: utils.CountTokens(string(bodyBytes)),
 			CacheHitLevel: "BYPASS",
 		}
 	}
+
+	// Feature 1: Loop detection. If 3+ identical calls land in a 60s
+	// window, the 3rd+ is served from the loop's cached response
+	// (the FIRST call's response). Catches runaway agents that retry
+	// the same tool call in a tight loop.
+	loopResult := optiagent.DetectLoop(ctx, rdb, virtualKey, optResult.PayloadHash)
+	if loopResult.IsLoop {
+		log.Printf("[ProxyHandler] Loop detected: count=%d/%d in %ds (hash=%s) model=%s",
+			loopResult.LoopCount, optiagent.LOOP_THRESHOLD, loopResult.WindowSecs,
+			optResult.PayloadHash[:12], reqModel)
+	}
+	if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
+		log.Printf("[ProxyHandler] LOOP HIT (count=%d) — serving cached response instead of upstream", loopResult.LoopCount)
+
+		restamped := utils.RestampModel(loopResult.ReusePayload, reqModel)
+		if wantStream {
+			streamCachedResponse(w, restamped, reqModel)
+		} else {
+			w.Header().Set("Content-Type", "application/json")
+			w.Write(restamped)
+		}
+
+		// Telemetry: log the loop hit as a cache hit (LOOP level)
+		go workers.PushTelemetry(virtualKey, provider, reqModel,
+			optResult.PromptTokensOrig, 0, 0, 0, 0, "LOOP",
+			time.Since(startTime), string(bodyBytes), string(optResult.Payload),
+			0, 0, 0, 0,
+			agentSig.ID, agentSig.Label, sessionID, zeroLog)
+		return
+	}
+
 
 	executeRequest := func(currentProvider, currentRealKey string) (*http.Response, error) {
 		var targetURL string
@@ -139,13 +248,44 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 				pMap["stream"] = true
 				modified = true
 			}
-			
-			forceModel := defaultModel
-			if forceModel == "" {
-				forceModel = os.Getenv("FORCE_MODEL")
+
+			// Model routing policy:
+			//   1. FORCE_MODEL env var (admin hard-override) wins.
+			//   2. If the client did NOT send a model, fall back to
+			//      defaultModel.
+			//   3. If the client DID send a model but the current provider
+			//      does not advertise it (e.g. Hermes asks for
+			//      "google/gemma-..." on a MiniMax-backed key), silently
+			//      substitute the provider's defaultModel for the upstream
+			//      call. The original model name is preserved in reqModel
+			//      and re-stamped on the response before it is returned to
+			//      the client, so downstream agents like Hermes still see
+			//      the model they asked for.
+			//   4. Otherwise, respect the client's choice.
+			clientSentModel := false
+			clientModel := ""
+			if m, ok := pMap["model"].(string); ok && m != "" && m != "unknown" {
+				clientSentModel = true
+				clientModel = m
 			}
-			if forceModel != "" {
-				pMap["model"] = forceModel
+			envForce := os.Getenv("FORCE_MODEL")
+			modelsForProvider := utils.ModelsForProvider(currentProvider)
+			_, modelKnown := modelsForProvider[clientModel]
+			switch {
+			case envForce != "":
+				pMap["model"] = envForce
+				modified = true
+			case !clientSentModel && defaultModel != "":
+				pMap["model"] = defaultModel
+				modified = true
+			case clientSentModel && !modelKnown && defaultModel != "":
+				// Unknown model on this provider — fall through to the
+				// provider's default for the upstream call. The response
+				// will be re-stamped with clientModel by streamResponse
+				// (or cached-response path) so the client sees the name
+				// it expected.
+				log.Printf("[ProxyHandler] Model %q not advertised by provider %q — routing to default %q and re-stamping response", clientModel, currentProvider, defaultModel)
+				pMap["model"] = defaultModel
 				modified = true
 			}
 			
@@ -213,10 +353,10 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	streamResponse(w, resp, virtualKey, realKey, usedProvider, reqModel, defaultModel, optResult.PayloadHash, optResult.Vector, optResult.PromptTokensOrig, optResult.PromptTokensOpt, optResult.CacheHitLevel, isBenchmark, bodyBytes, optResult.Payload, startTime, wantStream, cacheTtl)
+	streamResponse(w, resp, virtualKey, realKey, usedProvider, reqModel, defaultModel, optResult.PayloadHash, reqModel, optResult.Vector, optResult.PromptTokensOrig, optResult.PromptTokensOpt, optResult.CacheHitLevel, isBenchmark, bodyBytes, optResult.Payload, startTime, wantStream, cacheTtl, isNewModel, agentSig.ID, agentSig.Label, sessionID, zeroLog)
 }
 
-func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, provider, model, defaultModel, payloadHash string, vector []float32, promptOrig, promptOpt int, cacheLvl string, isBenchmark bool, rawPayload, optPayload []byte, startTime time.Time, wantStream bool, cacheTtl int) {
+func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, provider, model, defaultModel, payloadHash, clientModel string, vector []float32, promptOrig, promptOpt int, cacheLvl string, isBenchmark bool, rawPayload, optPayload []byte, startTime time.Time, wantStream bool, cacheTtl int, isNewModel bool, agentID, agentLabel, sessionID string, zeroLog bool) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
@@ -234,30 +374,67 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
 
-	modelRegex := regexp.MustCompile(`"model":"[^"]+"`)
-	replacement := []byte(`"model":"` + model + `"`)
+	// Model re-stamping: if the client asked for a model that we aliased
+	// upstream (e.g. "google/gemma-..." on a MiniMax-backed key), the
+	// upstream will echo its own model name in every chunk. Re-stamp each
+	// `data:` line so the client sees the model it asked for. We only do
+	// the rewrite when clientModel != model (upstream model).
+	needsRestamp := clientModel != "" && clientModel != model
 
 	reader := bufio.NewReader(resp.Body)
 	var fullResponse []byte
 	var firstChunkLogged bool
 
+	// Buffer for the first SSE event (data: {...}) to inspect upstream
+	// application errors (e.g. MiniMax status_code != 0). When detected we
+	// return a real HTTP 402/4xx to the client instead of forwarding a 200
+	// with a poison body (which makes the agent hang waiting for chunks).
+	var firstDataBuf []byte
+	const maxFirstEventBytes = 64 * 1024
+
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
-			if wantStream && bytes.HasPrefix(line, []byte("data: {")) {
-				line = modelRegex.ReplaceAll(line, replacement)
-			}
-			
 			if !firstChunkLogged {
 				log.Printf("[streamResponse] Upstream sent first chunk: %s", string(line))
 				firstChunkLogged = true
 			}
-			
+
+			// Re-stamp "model" in `data:` payloads so the client sees the
+			// model it asked for when we have aliased upstream.
+			if needsRestamp && bytes.HasPrefix(line, []byte("data: ")) {
+				line = utils.RestampModel(line, clientModel)
+			}
+
+			// Inspect the first data: line for an application error.
+			if len(firstDataBuf) < maxFirstEventBytes && bytes.HasPrefix(line, []byte("data: ")) {
+				firstDataBuf = append(firstDataBuf, line...)
+				if err := detectUpstreamAppError(firstDataBuf); err != nil {
+					log.Printf("[streamResponse] Upstream application error detected: %v", err)
+					// Reject the request with a real HTTP error and stop streaming.
+					w.Header().Set("Content-Type", "application/json")
+					statusCode := http.StatusBadGateway
+					if err.quota {
+						statusCode = http.StatusPaymentRequired
+					}
+					w.WriteHeader(statusCode)
+					json.NewEncoder(w).Encode(map[string]interface{}{
+						"error": map[string]interface{}{
+							"message": err.message,
+							"type":    "upstream_application_error",
+							"code":    err.statusCode,
+						},
+					})
+					flusher.Flush()
+					return
+				}
+			}
+
 			w.Write(line)
 			flusher.Flush()
 			fullResponse = append(fullResponse, line...)
 		}
-		
+
 		if err != nil {
 			if err != io.EOF {
 				log.Printf("[streamResponse] Read error: %v", err)
@@ -266,12 +443,17 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 		}
 	}
 
+	// Discover the real model name the upstream used. For SSE we have to
+	// reconstruct the full body first; for non-streaming it's already
+	// complete.
 	var cacheableResponse []byte
 	if wantStream {
 		cacheableResponse = reconstructFromSSE(fullResponse, model)
 	} else {
 		cacheableResponse = fullResponse
 	}
+
+	realModel := extractModelFromResponse(cacheableResponse, model)
 
 	isValidResponse := false
 	if resp.StatusCode == http.StatusOK && len(cacheableResponse) > 0 {
@@ -294,20 +476,69 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 		rdb := db.GetRedis()
 		l1Key := "optitoken:l1cache:" + vk + ":" + payloadHash
 		ttl := time.Duration(cacheTtl) * time.Second
-		rdb.Set(ctx, l1Key, cacheableResponse, ttl)
 
-		if len(vector) > 0 {
-			buf := new(bytes.Buffer)
-			if binary.Write(buf, binary.LittleEndian, vector) == nil {
-				l2Key := "optitoken:l2cache:" + vk + ":" + payloadHash
-				rdb.HSet(ctx, l2Key, "vk", vk, "vector", buf.Bytes(), "response", cacheableResponse)
-				rdb.Expire(ctx, l2Key, ttl)
+		// Zero-Log Mode: we still token-count and measure latency
+		// (metadata is fine) but we do NOT store the response body in
+		// L1/L2 cache, and we do NOT store it as a loop response. The
+		// upstream provider still has the response (we just don't
+		// keep it on our side).
+		if zeroLog {
+			log.Printf("[streamResponse] Zero-Log Mode: skipping L1/L2/loop cache for vk=%s hash=%s", vk, payloadHash[:12])
+		} else {
+			rdb.Set(ctx, l1Key, cacheableResponse, ttl)
+
+			// Feature 1 (continuation): remember this response as the
+			// "first" of a potential loop. The 3rd+ identical call in the
+			// next 60s will pull this from the loop cache instead of
+			// re-hitting upstream.
+			//
+			// Safety net: don't cache a poisoned response (e.g. a MiniMax
+			// quota error returned as an empty `content:""`). Same check
+			// as the L1 cache.
+			if !utils.IsCachedResponseAnError(cacheableResponse) {
+				optiagent.StoreLoopFirstResponse(ctx, rdb, vk, payloadHash, cacheableResponse)
+			}
+
+			if len(vector) > 0 {
+				buf := new(bytes.Buffer)
+				if binary.Write(buf, binary.LittleEndian, vector) == nil {
+					l2Key := "optitoken:l2cache:" + vk + ":" + payloadHash
+					rdb.HSet(ctx, l2Key, "vk", vk, "vector", buf.Bytes(), "response", cacheableResponse)
+					rdb.Expire(ctx, l2Key, ttl)
+				}
 			}
 		}
 	}
 
-	truePromptTokens, completionTokens := utils.ExtractUsage(cacheableResponse)
-	
+	usage := utils.ExtractUsage(cacheableResponse)
+	truePromptTokens := usage.PromptTokens
+	completionTokens := usage.CompletionTokens
+	reasoningTokens := usage.ReasoningTokens
+
+	// Model Radar: two complementary actions.
+	// 1. If a previously-unknown model returned a parseable usage block,
+	//    promote it to "known" so we stop flagging it.
+	// 2. If we still couldn't parse usage from a flagged new model, store
+	//    the raw response so we can later discover its fields.
+	//
+	// Under Zero-Log Mode we skip step 2 entirely (the raw response
+	// contains user content and must never be persisted). Step 1 is
+	// safe because it only stores metadata (the model name), no
+	// content.
+	if isNewModel && !zeroLog {
+		if usage.Source != "estimated" && (usage.PromptTokens > 0 || usage.CompletionTokens > 0) {
+			go workers.PromoteKnown(context.Background(), db.GetRedis(), provider, realModel)
+		} else if usage.PromptTokens == 0 && usage.CompletionTokens == 0 {
+			// CollectSample is non-blocking; we add a follow-up discovery
+			// attempt that runs the FieldDiscoverer on the accumulated
+			// samples once we have enough of them. The goroutine is
+			// safe to fire on every miss because TryDiscoverForModel
+			// is idempotent and the sample list is bounded.
+			go workers.CollectSample(context.Background(), db.GetRedis(), realModel, cacheableResponse)
+			go workers.TryDiscoverForModel(context.Background(), db.GetRedis(), realModel)
+		}
+	}
+
 	if truePromptTokens > 0 {
 		// Calculate ratio of actual billed tokens vs our tiktoken estimation
 		// To safely adjust promptOrig for L3 compression without apples-to-oranges comparison.
@@ -318,21 +549,41 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 
 		promptOpt = truePromptTokens
 
-		// If no optimization was applied (Standard Routing), the original tokens 
+		// If no optimization was applied (Standard Routing), the original tokens
 		// should match exactly what the provider billed, to avoid false "savings" anomalies.
 		if cacheLvl == "NONE" {
 			promptOrig = truePromptTokens
 		}
 	}
-	
+
 	completionOrig := completionTokens
 	completionOpt := completionTokens
 
-	go workers.PushTelemetry(vk, provider, model, promptOrig, completionOrig, promptOpt, completionOpt, cacheLvl, time.Since(startTime), string(rawPayload), string(optPayload))
+	go workers.PushTelemetry(vk, provider, realModel, promptOrig, completionOrig, promptOpt, completionOpt, reasoningTokens, cacheLvl, time.Since(startTime), string(rawPayload), string(optPayload), usage.CacheCreationTokens, usage.CacheReadTokens, usage.CacheHitTokens, usage.CacheMissTokens, agentID, agentLabel, sessionID, zeroLog)
 
 	if isBenchmark {
-		go runBenchmarkEvaluation(vk, realKey, provider, model, defaultModel, rawPayload, optPayload, cacheableResponse, time.Since(startTime), promptOpt, completionOpt)
+		go runBenchmarkEvaluation(vk, realKey, provider, realModel, defaultModel, rawPayload, optPayload, cacheableResponse, time.Since(startTime), promptOpt, completionOpt)
 	}
+}
+
+// extractModelFromResponse pulls the upstream model name out of a
+// reconstructed/streamed response. Falls back to the client-supplied
+// reqModel if the response doesn't carry one.
+func extractModelFromResponse(respBytes []byte, fallback string) string {
+	var body struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(respBytes, &body); err == nil && body.Model != "" {
+		return body.Model
+	}
+	return fallback
+}
+
+func pickModel(discovered, fallback string) string {
+	if discovered != "" {
+		return discovered
+	}
+	return fallback
 }
 
 func reconstructFromSSE(sseData []byte, model string) []byte {
@@ -340,6 +591,7 @@ func reconstructFromSSE(sseData []byte, model string) []byte {
 	var contentParts []string
 	var reasoningParts []string
 	var toolCalls []map[string]interface{}
+	discoveredModel := ""
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -350,9 +602,17 @@ func reconstructFromSSE(sseData []byte, model string) []byte {
 		if data == "[DONE]" {
 			continue
 		}
-		
+
 		var chunk map[string]interface{}
 		if err := json.Unmarshal([]byte(data), &chunk); err == nil {
+			// Capture the upstream model name from the first chunk that
+			// carries it. SSE chunks from OpenAI-compatible providers
+			// include `"model":"..."` in every chunk.
+			if discoveredModel == "" {
+				if m, ok := chunk["model"].(string); ok && m != "" {
+					discoveredModel = m
+				}
+			}
 			if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
 				if choice, ok := choices[0].(map[string]interface{}); ok {
 					if delta, ok := choice["delta"].(map[string]interface{}); ok {
@@ -427,7 +687,7 @@ func reconstructFromSSE(sseData []byte, model string) []byte {
 		"choices": []map[string]interface{}{
 			{"message": message, "finish_reason": "stop", "index": 0},
 		},
-		"model": model,
+		"model": pickModel(discoveredModel, model),
 	}
 	out, _ := json.Marshal(resp)
 	return out
@@ -675,4 +935,105 @@ Response B:
 			"opt_completion_tokens": completionOpt,
 		},
 	})
+}
+
+// appError describes an upstream application-level error that the proxy
+// surfaces to the client as a real HTTP status (instead of forwarding a
+// 200 OK with a poison body that causes the agent to hang).
+type appError struct {
+	statusCode int    // upstream's reported code (e.g. 2056 for MiniMax quota)
+	message    string // human-readable message
+	quota      bool   // true for quota/credit/payment-required errors
+}
+
+// detectUpstreamAppError parses an upstream response body and returns a
+// non-nil *appError if the upstream returned an application-level error
+// (despite the HTTP 200 status). Supports:
+//   - MiniMax: { "base_resp": { "status_code": N, "status_msg": "..." } }
+//   - OpenAI-style: { "error": { "message": "...", "type": "...", "code": ... } }
+//
+// nil means "no error detected, keep streaming".
+func detectUpstreamAppError(body []byte) *appError {
+	if len(body) == 0 {
+		return nil
+	}
+	// Extract the JSON part from an SSE "data: {...}" line.
+	jsonBody := body
+	if bytes.HasPrefix(body, []byte("data: ")) {
+		jsonBody = body[len("data: "):]
+		// SSE may include a trailing "\n\n" after the JSON.
+		if idx := bytes.IndexByte(jsonBody, '\n'); idx > 0 {
+			jsonBody = jsonBody[:idx]
+		}
+	}
+	// Skip the SSE "data: [DONE]" sentinel.
+	if bytes.HasPrefix(jsonBody, []byte("[DONE]")) {
+		return nil
+	}
+	if !bytes.HasPrefix(jsonBody, []byte("{")) {
+		return nil
+	}
+
+	// First, try a generic structure that can hold either base_resp or error.
+	var generic struct {
+		BaseResp *struct {
+			StatusCode int    `json:"status_code"`
+			StatusMsg  string `json:"status_msg"`
+		} `json:"base_resp"`
+		Error *struct {
+			Message string `json:"message"`
+			Type    string `json:"type"`
+			Code    string `json:"code"`
+		} `json:"error"`
+		// Some upstreams (e.g. Anthropic) put code at the top level.
+		TopCode any `json:"code"`
+	}
+	if err := json.Unmarshal(jsonBody, &generic); err != nil {
+		return nil
+	}
+
+	// MiniMax-style: base_resp.status_code != 0 means error.
+	if generic.BaseResp != nil && generic.BaseResp.StatusCode != 0 {
+		msg := generic.BaseResp.StatusMsg
+		if msg == "" {
+			msg = fmt.Sprintf("upstream returned status_code %d", generic.BaseResp.StatusCode)
+		}
+		return &appError{
+			statusCode: generic.BaseResp.StatusCode,
+			message:    msg,
+			quota:      isQuotaError(generic.BaseResp.StatusCode, msg),
+		}
+	}
+
+	// OpenAI-style: { "error": { ... } }
+	if generic.Error != nil && generic.Error.Message != "" {
+		msg := generic.Error.Message
+		return &appError{
+			statusCode: 0,
+			message:    msg,
+			quota:      isQuotaError(0, msg),
+		}
+	}
+
+	return nil
+}
+
+// isQuotaError returns true if the upstream error looks like a quota/credit
+// problem (so the proxy can return HTTP 402 Payment Required to the client).
+func isQuotaError(code int, msg string) bool {
+	m := strings.ToLower(msg)
+	keywords := []string{
+		"quota", "credit", "usage limit", "rate limit", "billing", "plan",
+		"insufficient", "payment", "exhausted",
+	}
+	for _, k := range keywords {
+		if strings.Contains(m, k) {
+			return true
+		}
+	}
+	// MiniMax returns code 2056 for quota and 1002/1003/1004 for billing.
+	if code == 2056 || code == 1002 || code == 1003 || code == 1004 {
+		return true
+	}
+	return false
 }

@@ -1,12 +1,16 @@
 package handlers
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"sort"
 	"time"
+
+	"optitoken/internal/db"
+	"optitoken/internal/workers"
 )
 
 type FetchModelsRequest struct {
@@ -87,6 +91,16 @@ func FetchModelsHandler(w http.ResponseWriter, r *http.Request) {
 	sort.Slice(models, func(i, j int) bool {
 		return models[i].ID < models[j].ID
 	})
+
+	// Seed the Model Radar with the models we just confirmed exist.
+	// Fire-and-forget: the dashboard response is not blocked on this.
+	if rdb := db.GetRedis(); rdb != nil {
+		ids := make([]string, 0, len(models))
+		for _, m := range models {
+			ids = append(ids, m.ID)
+		}
+		go workers.RegisterKnownModels(context.Background(), rdb, reqData.Provider, ids)
+	}
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(FetchModelsResponse{Models: models})

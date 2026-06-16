@@ -3,19 +3,22 @@ dashboard/
 dashboard_old/
 extension/
 
-# Marketing and Internal Docs
+# Marketing and Internal Docs (kept out of the public repo)
 social_posts.md
+swot_analysis.md
+swot_analysis_critical.md
 video_prompts.md
 video_script.md
 video_scripts_v2.md
 LAUNCH_KIT.md
-USE_CASES.md
+ideas.md
 DEPLOYMENT_HETZNER.md
 docs/MONETIZATION.md
 
 # Logs and Scratch
 .system_generated/
 scratch/
+.kilo/
 
 # Env files
 .env
@@ -44,3 +47,10 @@ go.work.sum
 
 # Temporary files
 *.log
+
+# Tests / dev scratch
+test_redis.go
+test_vss.go
+
+# Deployment bundle tarballs
+*.tar.gz
