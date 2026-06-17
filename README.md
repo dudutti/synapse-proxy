@@ -146,6 +146,8 @@ OptiToken operates using a localized **Redis Stack** with Vector Search (`RedisS
 5. **Loop Detection**: Records the payload hash in a per-key ZSET; if 3+ identical requests land in 60s, the 3rd+ is served from the loop cache (unless Zero-Log is on).
 6. **L3 Compression**: If all caches miss, structurally compresses the agent's prompt (prune `<thought>` blocks, minify tool outputs) and forwards it to the LLM.
 7. **Smart Routing**: If the requested model is unknown to the provider, silently substitute the key's `defaultModel` and re-stamp the response so the client sees the name it asked for.
+   - **Why `defaultModel` matters per agent SDK**: Each agent SDK names the model differently. Hermes running through LM Studio sends the local model name (e.g. `google/gemma-4-26b-a4b-qat`). OpenClaw often sends Anthropic-style aliases (`claude-3.5-sonnet`). The proxy translates these to the user's `defaultModel` for the upstream call, then re-stamps the response with the agent's original name so the agent stays unaware of the aliasing.
+   - **Best practice**: pick a `defaultModel` at key creation that matches the cheapest model the provider actually serves. Without a `defaultModel` set, requests for unknown model names fail at the upstream instead of being silently routed.
 8. **Streaming**: Responses stream back to the client transparently. The proxy watches for upstream application errors (`base_resp.status_code != 0`, empty `content`) and returns a clean HTTP 4xx to the client instead of a 200 with a poison body.
 9. **Telemetry**: Each request is recorded asynchronously to a Redis Stream (`optitoken:telemetry:logs`, capped at 100k entries) and consumed by a background worker that writes to `RequestLog` in PostgreSQL.
 
