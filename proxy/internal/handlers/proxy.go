@@ -400,7 +400,17 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		client := &http.Client{Timeout: 90 * time.Second}
-		return client.Do(req)
+		upstreamStart := time.Now()
+		resp, doErr := client.Do(req)
+		// Record latency bucket for the Prometheus /metrics endpoint.
+		// isError is true when the call returned a non-2xx status — useful
+		// to compute a real error rate, not just an outlier rate.
+		if resp != nil {
+			metrics.RecordUpstream(int(time.Since(upstreamStart).Milliseconds()), resp.StatusCode >= 400)
+		} else if doErr != nil {
+			metrics.RecordUpstream(int(time.Since(upstreamStart).Milliseconds()), true)
+		}
+		return resp, doErr
 	}
 
 	maxRetries := 3

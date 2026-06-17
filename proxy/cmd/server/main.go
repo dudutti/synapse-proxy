@@ -7,6 +7,7 @@ import (
 
 	"optitoken/internal/db"
 	"optitoken/internal/handlers"
+	"optitoken/internal/metrics"
 	"optitoken/internal/utils"
 	"optitoken/internal/workers"
 )
@@ -37,6 +38,17 @@ func main() {
 	http.HandleFunc("/v1/chat/completions", handlers.ProxyHandler)
 	http.HandleFunc("/v1/cache/purge", handlers.CachePurgeHandler)
 	http.HandleFunc("/v1/providers/models", handlers.FetchModelsHandler)
+
+	// 6. Observability — health checks for k8s / load balancers, and
+	// /metrics for Prometheus scraping.
+	//
+	//   /healthz — 200 if the process is alive (no dep checks)
+	//   /readyz  — 200 only if Redis is reachable; 503 otherwise
+	//   /metrics — Prometheus text exposition (cache hits, tokens
+	//              saved, $ saved, panics, upstream latency buckets)
+	http.HandleFunc("/healthz", handlers.HealthzHandler)
+	http.HandleFunc("/readyz", handlers.ReadyzHandler)
+	http.Handle("/metrics", metrics.Handler())
 
 	// 6. Start Server
 	fmt.Println("OptiToken Data Plane listening on :8080...")

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"optitoken/internal/db"
+	"optitoken/internal/metrics"
 	"optitoken/internal/utils"
 
 	"github.com/redis/go-redis/v9"
@@ -59,6 +60,14 @@ func PushTelemetry(
 		promptSaved, compSaved,
 		estimatedReadSaved, estimatedCreationSaved,
 	)
+
+	// Increment Prometheus counters (see metrics package). Skip the
+	// "NONE" bucket — that's the upstream path, not a cache hit, and
+	// we don't want to confuse cache_hit_rate with "proxy worked".
+	if cacheLevel != "" && cacheLevel != "NONE" {
+		tokensSaved := uint64(promptSaved + compSaved)
+		metrics.RecordCacheHit(cacheLevel, tokensSaved, breakdown.Total())
+	}
 
 	logData := map[string]interface{}{
 		"virtual_key":           vk,
