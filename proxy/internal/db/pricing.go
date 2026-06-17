@@ -85,6 +85,16 @@ func syncPricing() {
 
 // GetModelPricing returns the pricing for a given provider and model.
 // If not found, it returns generic defaults (1.00 per 1M for input/output).
+//
+// Known pricing gaps (provider:model combos observed in production
+// that are not in ProviderModel) should be seeded in Postgres:
+//   INSERT INTO "ProviderModel" (provider, "modelName", "costPromptPer1M", "costCompletionPer1M", "costCachedInputPer1M", "costCacheWritePer1M") VALUES ...
+//
+// Per-agent model aliasing (Hermes, OpenClaw, Claude Code, LM Studio
+// bridge) is handled in handlers/proxy.go via the virtual key's
+// defaultModel + utils.RestampModel. We don't translate here because
+// the price depends on what the upstream actually charges for, not on
+// what the SDK thinks it's calling.
 func GetModelPricing(provider, model string) ModelPricing {
 	pricingMutex.RLock()
 	defer pricingMutex.RUnlock()
@@ -94,7 +104,9 @@ func GetModelPricing(provider, model string) ModelPricing {
 		return p
 	}
 
-	// Fallback generic pricing
+	// Fallback generic pricing. Logged once per (provider,model) so
+	// pricing gaps are visible in logs and can be seeded in the DB.
+	logOnce(key)
 	return ModelPricing{
 		Provider:          provider,
 		ModelName:         model,
@@ -103,4 +115,19 @@ func GetModelPricing(provider, model string) ModelPricing {
 		CostCachedInput1M: 0,
 		CostCacheWrite1M:  0,
 	}
+}
+
+var (
+	pricingLogMu  sync.Mutex
+	pricingLogged = make(map[string]bool)
+)
+
+func logOnce(key string) {
+	pricingLogMu.Lock()
+	defer pricingLogMu.Unlock()
+	if pricingLogged[key] {
+		return
+	}
+	pricingLogged[key] = true
+	log.Printf("PricingSyncer: %q not in ProviderModel — using fallback $1/MTok. Add it to ProviderModel or to agent profiles.", key)
 }

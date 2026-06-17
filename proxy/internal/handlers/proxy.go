@@ -11,11 +11,13 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
 
 	"optitoken/internal/db"
+	"optitoken/internal/metrics"
 	"optitoken/internal/services"
 	"optitoken/internal/utils"
 	"optitoken/internal/workers"
@@ -25,6 +27,27 @@ import (
 
 // ProxyHandler is the main HTTP handler intercepting LLM requests
 func ProxyHandler(w http.ResponseWriter, r *http.Request) {
+	// Panic recovery: one malformed payload must not take down the
+	// whole Go process. A single panic here would otherwise crash the
+	// container, Docker restarts it, every in-flight request gets reset,
+	// latency p99 explodes and logs flood with the same stack trace on
+	// every restart. Recover, log the panic + stack + request ID, and
+	// return a clean 502 to the client.
+	defer func() {
+		if rec := recover(); rec != nil {
+			stack := debug.Stack()
+			log.Printf("[ProxyHandler] PANIC recovered: %v\nrequest: %s %s\nvk=%s\nstack:\n%s",
+				rec, r.Method, r.URL.Path, maskVirtualKey(r.Header.Get("Authorization")), stack)
+			metrics.RecordPanic("ProxyHandler")
+			// Best-effort response. If the handler already wrote headers
+			// (e.g. started streaming), we can't send a new status code.
+			if w.Header().Get("Content-Type") == "" {
+				w.Header().Set("Content-Type", "application/json")
+				http.Error(w, `{"error":"proxy recovered from internal panic, please retry"}`, http.StatusBadGateway)
+			}
+		}
+	}()
+
 	ctx := r.Context()
 	startTime := time.Now()
 
@@ -1135,4 +1158,19 @@ func isQuotaError(code int, msg string) bool {
 		return true
 	}
 	return false
+}
+
+// maskVirtualKey returns a short, non-secret prefix of the virtual key
+// for safe inclusion in panic / error logs. Format: first 8 chars + "…"
+// (e.g. "sk-opti…"). Returns "<empty>" for empty input.
+func maskVirtualKey(authHeader string) string {
+	vk := strings.TrimPrefix(authHeader, "Bearer ")
+	vk = strings.TrimSpace(vk)
+	if vk == "" {
+		return "<empty>"
+	}
+	if len(vk) <= 8 {
+		return vk[:min(len(vk), 4)] + "…"
+	}
+	return vk[:8] + "…"
 }
