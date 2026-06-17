@@ -1,0 +1,77 @@
+# SaaS and Proprietary Code
+dashboard/
+dashboard_old/
+extension/
+
+# Marketing and Internal Docs (kept out of the public repo)
+social_posts.md
+swot_analysis.md
+swot_analysis_critical.md
+video_prompts.md
+video_script.md
+video_scripts_v2.md
+LAUNCH_KIT.md
+ideas.md
+DEPLOYMENT_HETZNER.md
+docs/MONETIZATION.md
+
+# Internal deploy procedures — contain SSH hostkeys, passwords, server IPs.
+# NEVER commit. Keep only on the dev machine.
+docs/DEPLOY_PROCEDURE.md
+deploy-procedure*.md
+DEPLOY_PROCEDURE*.md
+
+# Production infra config — contains Hetzner server IPs, Caddy TLS config,
+# deploy scripts with credentials. NEVER commit.
+Caddyfile
+Caddyfile.prod
+create-deploy-bundle.sh
+deploy-prod.sh
+docker-compose.prod.yml
+proxy/docker-compose.yml
+.env
+.env.*
+!*.example
+
+# Logs and Scratch
+.system_generated/
+scratch/
+.kilo/
+
+# Env files
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Node
+node_modules/
+.next/
+out/
+build/
+dist/
+
+# Docker and OS
+.DS_Store
+*.pem
+
+# Go build outputs
+proxy/proxy-server
+
+# Go Workspace
+go.work
+go.work.sum
+
+# Temporary files
+*.log
+
+# Local cache / build artifacts
+proxy/cache/
+
+# Tests / dev scratch
+test_redis.go
+test_vss.go
+
+# Deployment bundle tarballs
+*.tar.gz
