@@ -198,7 +198,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 				// Telemetry for the L0 follower: same payload hash, but
 				// cacheLevel=L0 so it's counted separately from L1/L2/L3.
 				// TokensOrig=TokensOpt=0 because the follower did no work.
-				go workers.PushTelemetry(virtualKey, provider, reqModel, 0, 0, 0, 0, 0, "L0", time.Since(startTime), string(bodyBytes), string(bodyBytes), 0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog)
+				go workers.PushTelemetry(virtualKey, provider, reqModel, 0, 0, 0, 0, 0, "L0", time.Since(startTime), string(bodyBytes), string(bodyBytes), string(resp), 0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog)
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-OptiToken-Cache", "L0-coalesced")
 				w.Write(resp)
@@ -253,7 +253,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 					w.Write(restamped)
 				}
 
-				go workers.PushTelemetry(virtualKey, provider, reqModel, optResult.PromptTokensOrig, cachedUsage.CompletionTokens, optResult.PromptTokensOpt, 0, cachedUsage.ReasoningTokens, optResult.CacheHitLevel, time.Since(startTime), string(bodyBytes), string(optResult.Payload), cachedUsage.CacheCreationTokens, cachedUsage.CacheReadTokens, cachedUsage.CacheHitTokens, cachedUsage.CacheMissTokens, agentSig.ID, agentSig.Label, sessionID, zeroLog)
+				go workers.PushTelemetry(virtualKey, provider, reqModel, optResult.PromptTokensOrig, cachedUsage.CompletionTokens, optResult.PromptTokensOpt, 0, cachedUsage.ReasoningTokens, optResult.CacheHitLevel, time.Since(startTime), string(bodyBytes), string(optResult.Payload), string(restamped), cachedUsage.CacheCreationTokens, cachedUsage.CacheReadTokens, cachedUsage.CacheHitTokens, cachedUsage.CacheMissTokens, agentSig.ID, agentSig.Label, sessionID, zeroLog)
 
 				if isBenchmark {
 					go runBenchmarkEvaluation(virtualKey, realKey, provider, reqModel, defaultModel, bodyBytes, optResult.Payload, optResult.HitResponse, time.Since(startTime), 0, 0)
@@ -299,6 +299,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		go workers.PushTelemetry(virtualKey, provider, reqModel,
 			optResult.PromptTokensOrig, 0, 0, 0, 0, "LOOP",
 			time.Since(startTime), string(bodyBytes), string(optResult.Payload),
+			string(restamped),
 			0, 0, 0, 0,
 			agentSig.ID, agentSig.Label, sessionID, zeroLog)
 		return
@@ -691,7 +692,7 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 	completionOrig := completionTokens
 	completionOpt := completionTokens
 
-	go workers.PushTelemetry(vk, provider, realModel, promptOrig, completionOrig, promptOpt, completionOpt, reasoningTokens, cacheLvl, time.Since(startTime), string(rawPayload), string(optPayload), usage.CacheCreationTokens, usage.CacheReadTokens, usage.CacheHitTokens, usage.CacheMissTokens, agentID, agentLabel, sessionID, zeroLog)
+	go workers.PushTelemetry(vk, provider, realModel, promptOrig, completionOrig, promptOpt, completionOpt, reasoningTokens, cacheLvl, time.Since(startTime), string(rawPayload), string(optPayload), string(cacheableResponse), usage.CacheCreationTokens, usage.CacheReadTokens, usage.CacheHitTokens, usage.CacheMissTokens, agentID, agentLabel, sessionID, zeroLog)
 
 	if isBenchmark {
 		go runBenchmarkEvaluation(vk, realKey, provider, realModel, defaultModel, rawPayload, optPayload, cacheableResponse, time.Since(startTime), promptOpt, completionOpt)

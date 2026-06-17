@@ -2,6 +2,7 @@ package workers
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -21,7 +22,7 @@ func PushTelemetry(
 	vk, provider, model string,
 	promptOrig, completionOrig, promptOpt, completionOpt, reasoningTokens int,
 	cacheLevel string, duration time.Duration,
-	origPayload, optPayload string,
+	origPayload, optPayload, responsePayload string,
 	cacheCreationTokens, cacheReadTokens, cacheHitTokens, cacheMissTokens int,
 	agentID, agentLabel, sessionID string,
 	zeroLog bool,
@@ -101,9 +102,22 @@ func PushTelemetry(
 	if zeroLog {
 		origPayload = ""
 		optPayload = ""
+		responsePayload = ""
+	}
+	// Compute payloadHash from the original request body. The proxy
+	// computes this too (for its L1/L2 cache keys), but for the
+	// BYPASS path it stays as "" — so we recompute here on the worker
+	// side to make sure every RequestLog row has a usable hash for
+	// /api/admin/expensive-prompts groupBy.
+	var payloadHash string
+	if !zeroLog && origPayload != "" {
+		h := sha256.Sum256([]byte(origPayload))
+		payloadHash = fmt.Sprintf("%x", h)
 	}
 	logData["orig_payload"] = origPayload
 	logData["opt_payload"] = optPayload
+	logData["response_payload"] = responsePayload
+	logData["payload_hash"] = payloadHash
 	_ = zeroLog // already used above
 
 	_, err := rdb.XAdd(ctx, &redis.XAddArgs{
@@ -259,6 +273,7 @@ func ConsumeTelemetryWorker() {
 
 			origPayload := fmt.Sprint(msg.Values["orig_payload"])
 			optPayload := fmt.Sprint(msg.Values["opt_payload"])
+			responsePayload := fmt.Sprint(msg.Values["response_payload"])
 
 			// If payload is empty, handle it as null or empty string, Sprint of nil is "<nil>"
 			if origPayload == "<nil>" {
@@ -267,13 +282,87 @@ func ConsumeTelemetryWorker() {
 			if optPayload == "<nil>" {
 				optPayload = ""
 			}
+			if responsePayload == "<nil>" {
+				responsePayload = ""
+			}
+			payloadHash := fmt.Sprint(msg.Values["payload_hash"])
+			if payloadHash == "<nil>" {
+				payloadHash = ""
+			}
 
-			// Safely parameterized query
-			query := `
-				INSERT INTO "RequestLog" (id, "apiKeyId", provider, model, "agentId", "agentLabel", "sessionId", "promptTokensOrig", "completionTokensOrig", "promptTokensOpt", "completionTokensOpt", "reasoningTokens", "cacheCreationTokens", "cacheReadTokens", "cacheHitTokens", "cacheMissTokens", "costSaved", "savingsInputFresh", "savingsCacheRead", "savingsCacheCreation", "savingsOutput", "cacheLevel", "durationMs", "originalPayload", "optimizedPayload", "createdAt")
-				SELECT gen_random_uuid(), id, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24, NOW() FROM "ApiKey" WHERE "virtualKey" = $1
-			`
-			_, err = postgresDB.Exec(query, vk, prov, model, agentID, agentLabel, sessionID, promptOrig, compOrig, promptOpt, compOpt, reasoningTokens, cacheCreationTokens, cacheReadTokens, cacheHitTokens, cacheMissTokens, costSaved, savingsInputFresh, savingsCacheRead, savingsCacheCreation, savingsOutput, cacheLvl, durMs, origPayload, optPayload)
+			// Two-query approach — much simpler than a single INSERT…SELECT
+			// and impossible to misalign. We previously had INSERT…SELECT
+			// FROM "ApiKey" WHERE "virtualKey" = $1 with column counts that
+			// kept drifting by 1 every time we added a column to the
+			// schema. Splitting the lookup from the insert eliminates the
+			// off-by-one risk entirely.
+
+			// Step 1: look up the ApiKey.id
+			var apiKeyID string
+			err = postgresDB.QueryRow(
+				`SELECT id FROM "ApiKey" WHERE "virtualKey" = $1`, vk,
+			).Scan(&apiKeyID)
+			if err != nil {
+				log.Printf("DB apiKey lookup failed for vk=%s: %v", vk, err)
+				rdb.XAck(ctx, "optitoken:telemetry:logs", "telemetry_group", msg.ID)
+				continue
+			}
+
+			// Step 2: insert with 27 explicit values. createdAt is omitted
+			// entirely so the DB default (CURRENT_TIMESTAMP) fires — we
+			// MUST NOT include it in the column list or VALUES, otherwise
+			// we shift every subsequent column by one and get a "more
+			// expressions than target columns" error. Same for the id
+			// column: there's no DEFAULT in the schema, so we pass
+			// gen_random_uuid() explicitly.
+			//
+			// Column-to-param mapping (matches the schema exactly):
+			//   $1=id (gen_random_uuid)
+			//   $2=apiKeyId, $3=provider, $4=model,
+			//   $5=promptTokensOrig, $6=completionTokensOrig,
+			//   $7=promptTokensOpt, $8=completionTokensOpt,
+			//   $9=reasoningTokens, $10=cacheCreationTokens,
+			//   $11=cacheReadTokens, $12=cacheHitTokens, $13=cacheMissTokens,
+			//   $14=costSaved, $15=savingsInputFresh, $16=savingsCacheRead,
+			//   $17=savingsCacheCreation, $18=savingsOutput,
+			//   $19=cacheLevel, $20=durationMs,
+			//   $21=originalPayload, $22=optimizedPayload,
+			//   (createdAt omitted — DB default)
+			//   $23=agentId, $24=agentLabel, $25=sessionId,
+			//   $26=responsePayload, $27=payloadHash
+			//
+			// 27 columns listed → 27 explicit values → 26 params + gen_random_uuid → match.
+			_, err = postgresDB.Exec(`
+				INSERT INTO "RequestLog" (
+					id, "apiKeyId", provider, model,
+					"promptTokensOrig", "completionTokensOrig",
+					"promptTokensOpt", "completionTokensOpt",
+					"reasoningTokens", "cacheCreationTokens",
+					"cacheReadTokens", "cacheHitTokens", "cacheMissTokens",
+					"costSaved", "savingsInputFresh", "savingsCacheRead",
+					"savingsCacheCreation", "savingsOutput",
+					"cacheLevel", "durationMs",
+					"originalPayload", "optimizedPayload",
+					"agentId", "agentLabel", "sessionId",
+					"responsePayload", "payloadHash"
+				) VALUES (
+					gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
+					$13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
+					$25, $26
+				)
+			`,
+				apiKeyID, prov, model,
+				promptOrig, compOrig,
+				promptOpt, compOpt,
+				reasoningTokens, cacheCreationTokens,
+				cacheReadTokens, cacheHitTokens, cacheMissTokens,
+				costSaved, savingsInputFresh, savingsCacheRead,
+				savingsCacheCreation, savingsOutput,
+				cacheLvl, durMs,
+				origPayload, optPayload,
+				agentID, agentLabel, sessionID,
+				responsePayload, payloadHash,
+			)
 
 			if err == nil {
 				rdb.XAck(ctx, "optitoken:telemetry:logs", "telemetry_group", msg.ID)
