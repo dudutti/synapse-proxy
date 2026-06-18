@@ -95,6 +95,46 @@ What we offer instead is **Operational Confidentiality**: your data never leaves
 
 ---
 
+## ✅ Real benchmark: Phase 2 validated
+
+The cache-preserving L3 architecture (Phases 1 + 2) was validated
+empirically on 2026-06-18 against a Hermes-style workload on the
+production proxy (provider: MiniMax-M3, ~6.5k prompt tokens per
+call, 5 sequential identical requests).
+
+| Metric | Result |
+|--------|--------|
+| **Provider cache hit** (4th call) | **6 550 / 6 564 prompt tokens (99.8%)** served from `cached_tokens` |
+| **Cost reduction on cached call** | $0.00197 → $0.00040 (**5× cheaper**) |
+| **Prefix byte-exactness** | `originalPrompt` MD5 identical across 5 requests (`b84adc764038555f3d039f4331f18a20`) |
+| **Latency on L1 hit** | 8 ms vs 3 492 ms L1-miss (440× faster) |
+| **Prompt compression (when L1 miss)** | 6 564 → 6 564 (no compression in our 4-message Hermes tail) |
+
+The smoking gun is `data_proxy_log.txt` line 2:
+```
+prompt_tokens: 6564, cached_tokens: 6550
+```
+— 99.8% of the input was served from the provider's own cache
+because the prefix bytes were identical across calls. Without
+the prefix-preserving split, this would have been 0%.
+
+Raw data, scripts, and analysis live in
+[`test/ab_benchmark_2026_06_18/`](test/ab_benchmark_2026_06_18/).
+
+### Limitations of this benchmark
+
+- Single provider (MiniMax-M3), single model. We have not yet
+  run on Anthropic Claude, which exposes
+  `cache_creation_input_tokens` and `cache_read_input_tokens`
+  separately and would let us measure the cache hit rate
+  directly.
+- 5 sequential identical requests, not a 24-hour soak.
+- Streaming (`stream: true`) was not exercised.
+- The AI scorer (`aiReliabilityScore`) is a heuristic, not a
+  ground-truth quality measurement.
+
+---
+
 ## 🧊 Cache-Preserving L3 — Compatibility with Provider Prompt Cache
 
 The most subtle cost optimization in any LLM gateway is **provider prompt caching**. Anthropic, OpenAI, and MiniMax all cache the prefix of your requests on their side: pay `cache_write` once, get `cache_read` (typically 10% of the input price) for every follow-up call that shares the same prefix. This is the single biggest savings available for agentic workloads where the system prompt, tool definitions, and prior history are largely identical across calls.
