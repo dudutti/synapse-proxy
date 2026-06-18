@@ -128,6 +128,20 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		sessionID = sessID
 	}
 
+	// Server-side session recording: the dashboard's Record Session
+	// button writes a per-virtual-key tag to Redis (key
+	// `optitoken:session:vk:<vk>`) when the user clicks Start, and
+	// removes it on Stop. We check Redis on every request and, if a
+	// tag is present, override the sessionID with it. This lets the
+	// user record a session transparently: any agent (Hermes, curl,
+	// Playground) using this virtual key gets its RequestLog rows
+	// tagged, without the agent having to know about the session id.
+	//
+	// Header > Redis > header-derived session id > empty.
+	if dbTag := services.LookupSessionTag(ctx, virtualKey); dbTag != "" {
+		sessionID = dbTag
+	}
+
 	// Feature 3: Compaction hint — inject a system note so the agent
 	// knows that previous tool outputs may have been summarized. Only
 	// on the first turn of a session (or whenever the body has not
