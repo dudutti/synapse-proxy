@@ -28,7 +28,7 @@ If you are running Agentic workflows (Devin, AutoGPT, Hermes, LangChain, Claude 
 - 🔁 **In-flight Deduplication (L0)**: When two identical requests arrive at the same time (same SHA-256 payload + same virtual key), the first one acquires a Redis lock with 30s TTL and processes normally; the second one **blocks and waits** for the leader's response. Zero upstream cost on request bursts (retries, agent races, parallel curl). Telemetry tags the follower as `L0 Coalesced`.
 - ⚡ **Exact Matching (L1)**: Instant zero-cost responses for identical payloads using fast SHA-256 indexing. Sub-millisecond hit.
 - 🧠 **Semantic Caching (L2)**: Uses an embedded ONNX vector model to detect similar intents. "How do I loop in Python?" matches "Comment faire une boucle en Python?", stopping redundant agent loops instantly. **Auto-disabled** during agentic multi-turn trajectories and Record Sessions to prevent stale-turn responses from corrupting context.
-- 🗜️ **Structural Compression (L3)**: Built specifically for agents. If there's a cache miss, OptiToken automatically strips redundant whitespace, prunes stale Chain-of-Thought (`<thought>`) logs, and minifies huge JSON tool outputs before sending. Only applied when the compression actually shrinks the payload (in both bytes and tokens) to avoid re-encoding inflation.
+- 🗜️ **Structural Compression (L3)**: Built specifically for agents. If there's a cache miss, OptiToken automatically strips redundant whitespace, prunes stale Chain-of-Thought (`<thought>`) logs, and minifies huge JSON tool outputs before sending. Only applied when the compression actually shrinks the payload (in both bytes and tokens) to avoid re-encoding inflation. **Idempotent** — two compressions of the same payload produce byte-identical output, so it can co-exist with the provider's own prompt cache (Anthropic / OpenAI / MiniMax). See [Cache-Preserving L3](#-cache-preserving-l3--compatibility-with-provider-prompt-cache) below.
 
 **Agent safety — stop burning money on runaway behavior**
 - 🔁 **Loop detection**: If 3+ identical requests land in 60s, the 3rd+ is served from a loop cache. Catches runaway agents retrying the same tool call. Default threshold configurable; guard against poisoned responses (no replay of upstream error bodies).
@@ -92,6 +92,54 @@ Beyond A/B latency, v3 turns the Playground into a **real analytics workbench**:
 **End-to-End Encryption (E2E) is architecturally impossible for a proxy.** To perform semantic caching, context compression, and to forward your request to OpenAI/Anthropic, the proxy *must* be able to read the plaintext prompt. If the payload were encrypted, the proxy could not process it and neither could the AI provider. This is a fundamental constraint of every AI proxy on the market — including LiteLLM, PortKey, and Helicone. We are transparent about it.
 
 What we offer instead is **Operational Confidentiality**: your data never leaves our EU servers, is encrypted at every storage layer, and can be configured to never be persisted at all with **Zero-Log Mode**.
+
+---
+
+## 🧊 Cache-Preserving L3 — Compatibility with Provider Prompt Cache
+
+The most subtle cost optimization in any LLM gateway is **provider prompt caching**. Anthropic, OpenAI, and MiniMax all cache the prefix of your requests on their side: pay `cache_write` once, get `cache_read` (typically 10% of the input price) for every follow-up call that shares the same prefix. This is the single biggest savings available for agentic workloads where the system prompt, tool definitions, and prior history are largely identical across calls.
+
+**The problem with naive L3 compression**: it modifies the prompt (strips CoT, truncates tool outputs, normalizes whitespace). Because provider cache lookup is **byte-exact**, any modification invalidates the cache. The agent then pays full input price for the prefix on every call — wiping out most of the cache benefit.
+
+**Our solution** has three phases:
+
+### Phase 1 (shipped): Idempotent L3
+A custom deterministic JSON encoder (`proxy/optiagent/marshal_deterministic.go`) guarantees that two compressions of the same payload produce **byte-identical output**. This is the prerequisite: without it, even if the agent sends the same payload, OptiToken emits different bytes each time and the provider cache miss happens at OptiToken's hand, not the agent's.
+
+The encoder:
+- Emits object keys in **alphabetical order** (Go map iteration is randomized by design)
+- Produces **no whitespace** (compact, byte-stable)
+- Disables **HTML escaping** (`café` stays `café`, not `caf\u00e9`)
+- Handles all numeric types (`int`, `int64`, `float32`, `float64`, etc.) deterministically
+
+Six unit tests in `proxy/optiagent/compressor_test.go` lock this property in (idempotence over 100 calls, key order, compactness, no-HTML-escape, end-to-end compressor stability).
+
+### Phase 2 (in progress): Prefix-preserving split
+Instead of compressing the entire payload, OptiToken will:
+1. Parse the JSON request into a structural tree
+2. Identify the **static prefix** (system prompt + tools + first N "anchor" messages that stay byte-identical across calls)
+3. Compress **only the dynamic tail** (recent user messages, tool results, CoT from old assistant turns)
+4. Re-stitch the two halves at the end without ever touching the prefix bytes
+
+This guarantees the provider cache key never changes between calls, so the agent enjoys `cache_read` pricing on its 38k-token system prompt + history while OptiToken still strips redundant CoT/tool noise from the dynamic tail.
+
+### Phase 3 (planned): Smart `cache_control` injection
+When the upstream is Anthropic, OptiToken will detect prefixes ≥1024 tokens and inject the `cache_control: {type: "ephemeral"}` marker at the right position automatically. For OpenAI and MiniMax (automatic caching), no injection is needed — the byte-exact prefix match already does the job.
+
+### Why we don't do padding (yet)
+The "pad the prefix to 1024/2048 tokens" trick can artificially force cache activation, but it pollutes the agent's attention window and can trigger hallucinations. We're leaving it as a per-key opt-in feature flag (`enableCachePadding`) for users who know their agent loops frequently enough to amortize the `cache_write` cost — default off.
+
+### What you actually save with cache-preserving L3
+On a typical Hermes-style agent with a 38k-token system prompt + tools and a 12k-token rolling history (5k useful + 7k CoT/tool noise):
+
+| Path | Per-request cost (10 calls) |
+|------|---------------------------|
+| Direct to provider (no cache) | 50k × $0.30/1M × 10 = **$0.150** |
+| OptiToken L3 v1 (caches provider) | 50k × $0.30/1M × 10 = **$0.150** (no cache_write amortization) |
+| Provider cache (no OptiToken) | 38k cache_read × $0.06/1M + 12k input × $0.30/1M × 10 = **$0.059** |
+| **OptiToken L3 cache-preserving (Phase 2)** | 38k cache_read + 5k input × $0.30/1M × 10 = **$0.038** |
+
+The cache-preserving combination wins because you get **both** benefits stacked: 88% off the 38k-token prefix (provider cache) AND ~58% off the 12k-token dynamic tail (OptiToken L3).
 
 ---
 
