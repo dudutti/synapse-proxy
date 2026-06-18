@@ -1,352 +1,379 @@
-<div align="center">
-  <img src="https://optitoken.net/logo01.png?text=OptiToken" alt="OptiToken Logo" width="150" />
-  <h1>OptiToken Proxy</h1>
-  <p><strong>The Enterprise API Gateway for Autonomous Agents (OpenAI, Anthropic, Gemini, MiniMax...)</strong></p>
-  
-  <p>
-    <a href="https://optitoken.net"><img src="https://img.shields.io/badge/Live_Dashboard-optitoken.net-emerald?style=for-the-badge" alt="Enterprise SaaS"/></a>
-    <img src="https://img.shields.io/badge/Go-1.21-00ADD8?style=for-the-badge&logo=go" alt="Go Version"/>
-    <img src="https://img.shields.io/badge/Redis-Stack-DC382D?style=for-the-badge&logo=redis" alt="Redis Stack"/>
-    <img src="https://img.shields.io/badge/GDPR-Ready-4CAF50?style=for-the-badge" alt="GDPR"/>
-    <img src="https://img.shields.io/badge/Data_Residency-EU%20🇪🇺-blue?style=for-the-badge" alt="EU Data Residency"/>
-    <img src="https://img.shields.io/badge/license-MIT-blue?style=for-the-badge" alt="MIT License"/>
-  </p>
-</div>
+# OptiToken
+
+**An open-source LLM proxy that turns agent traffic into a measurable, optimizable flow.**
+
+OptiToken sits between your application and your LLM provider (OpenAI, Anthropic, MiniMax, any OpenAI-compatible endpoint). It deduplicates identical requests, prunes redundant context, and gives you a per-request telemetry stream so you can see what your agents are actually doing.
+
+> **Status:** v1.5 — running in production. Repo ships the proxy (Go, MIT). The dashboard at [optitoken.net](https://optitoken.net) is closed-source SaaS.
 
 ---
 
-## ⚡ What is OptiToken?
+## What problem does this solve?
 
-OptiToken is an ultra-fast, intelligent reverse-proxy written in **Go**. It sits between your application and your LLM provider (OpenAI, Anthropic, DeepSeek, MiniMax, etc.) to give you **total observability, control, and optimization over your Autonomous Agents' traffic**.
+Agentic workloads are repetitive. An agent looping through a codebase will read the same files, make the same tool calls, and re-emit the same `<thought>` blocks for hundreds of turns. A naive reverse proxy forwards every byte to the provider. The provider charges for every byte.
 
-If you are running Agentic workflows (Devin, AutoGPT, Hermes, LangChain, Claude Code), you know that agents generate massive, repetitive, and noisy traffic. OptiToken intercepts this traffic, logs it in real-time, and aggressively prunes redundant context before it hits the provider.
+OptiToken gives you three things in one binary:
 
-### ✨ Core Features (Open Core)
+1. **A four-tier cache** (L0 in-flight dedup → L1 exact match → L2 semantic → L3 compression) so the provider sees less traffic.
+2. **Per-request telemetry** so you can see what hit/missed, why, and at what cost.
+3. **An agent detector** so the cache can disable itself when the workload is a long-running agent (where caching would corrupt the context).
 
-**Caching — four layers stacked**
-- 🚀 **High Performance Go Proxy**: Designed to handle thousands of concurrent agent requests with near-zero overhead.
-- 🔁 **In-flight Deduplication (L0)**: When two identical requests arrive at the same time (same SHA-256 payload + same virtual key), the first one acquires a Redis lock with 30s TTL and processes normally; the second one **blocks and waits** for the leader's response. Zero upstream cost on request bursts (retries, agent races, parallel curl). Telemetry tags the follower as `L0 Coalesced`.
-- ⚡ **Exact Matching (L1)**: Instant zero-cost responses for identical payloads using fast SHA-256 indexing. Sub-millisecond hit.
-- 🧠 **Semantic Caching (L2)**: Uses an embedded ONNX vector model to detect similar intents. "How do I loop in Python?" matches "Comment faire une boucle en Python?", stopping redundant agent loops instantly. **Auto-disabled** during agentic multi-turn trajectories and Record Sessions to prevent stale-turn responses from corrupting context.
-- 🗜️ **Structural Compression (L3)**: Built specifically for agents. If there's a cache miss, OptiToken automatically strips redundant whitespace, prunes stale Chain-of-Thought (`<thought>`) logs, and minifies huge JSON tool outputs before sending. Only applied when the compression actually shrinks the payload (in both bytes and tokens) to avoid re-encoding inflation. **Idempotent** — two compressions of the same payload produce byte-identical output, so it can co-exist with the provider's own prompt cache (Anthropic / OpenAI / MiniMax). See [Cache-Preserving L3](#-cache-preserving-l3--compatibility-with-provider-prompt-cache) below.
-
-**Agent safety — stop burning money on runaway behavior**
-- 🔁 **Loop detection**: If 3+ identical requests land in 60s, the 3rd+ is served from a loop cache. Catches runaway agents retrying the same tool call. Default threshold configurable; guard against poisoned responses (no replay of upstream error bodies).
-- 🔍 **Tool-call dedup**: Detects when the same file is being re-read across requests (`read_file`, `cat`, `Read` → same path). Surfaces 30-50% of tool calls as redundant in the dashboard.
-- 💡 **Compaction hint**: A system-prompt note warns the agent that previous tool outputs are summarized and how to ask for the full content (`[EXPAND id]`). The agent learns to work on summaries by default.
-
-**Routing & multi-tenancy**
-- 🤖 **Auto agent detection**: Identifies the agent (Hermes, OpenClaw, Claude Code, LangChain, curl, Python SDK, …) from the User-Agent, system prompt, and tool names. No SDK to install. Live Telemetry groups logs by agent.
-- 🧭 **Smart model aliasing**: If the client requests a model that the key's provider doesn't advertise (e.g. `google/gemma-...` on a MiniMax-backed key), OptiToken silently routes to the key's default model and re-stamps the response so the client sees the name it asked for. The agent never breaks.
-- 🏷️ **Scope-aware multi-tenant cache**: For SaaS chatbot platforms, OptiToken auto-classifies each request as `personal` (never shared), `business` (shared between end-users of the same tenant) or `generic` (shared across all tenants). Zero data leak, 40-60% cache hit on the shareable traffic.
-
-**Observability & compliance**
-- 👁️ **Full observability**: Log every tool call, every loop, and every token generated by your agents in real-time, with per-class savings (input fresh / cache read / cache creation / output).
-- 📊 **Prometheus metrics + health checks**: Three endpoints ship on the data plane out of the box: `/healthz` (process alive, 200 if responding), `/readyz` (200 only if Redis is reachable, 503 otherwise — wire to k8s `readinessProbe`), `/metrics` (Prometheus text exposition: per-cache-level hit counts, tokens saved, $ saved in millicents, panic counts per handler, upstream latency in coarse buckets <10ms/<100ms/<500ms/<2s/>=2s, upstream error rate). No external Prometheus client library — output is hand-written and ~80 lines of code.
-- 🔒 **Zero-Log Mode**: Per-key privacy option. When enabled, prompt and response *content* is **never written to disk, never stored in cache, never indexed** — only token counts, latency, cost metrics, and metadata. Fully auditable in the open-source code. For clients who need maximum data confidentiality without sacrificing observability. Toggle via dashboard or API.
-- 🧠 **Model Radar**: When a new model lands with a slightly different JSON shape, the proxy flags it, collects up to 10 response samples, and runs a `FieldDiscoverer` to auto-detect the correct `prompt_tokens` / `completion_tokens` field paths. No LLM-in-the-loop, no human-in-the-loop for the common cases. The `model_radar` entries plus discovered `usage_mappings` are queryable from a `SUPERADMIN` API endpoint.
-- 💰 **Per-request cost computation**: Each request is logged with a `costSaved` value computed as the sum of the four per-class savings (input fresh, cache read, cache creation, output) using the provider's billed price per MTok. Pricing is loaded from the `ProviderModel` PostgreSQL table by a background syncer (`InitPricingSyncer`) refreshed every hour — **no hardcoded fallback** for known providers. Visible in the Live Telemetry and aggregated in the dashboard's "Total Value Saved" widget.
-- 🛡️ **Cache-poisoning guard**: Both L1 and Loop cache check the upstream response for empty content / `status_code != 0` / `finish_reason:"stop"` with empty `content` and refuse to cache it. Prevents replay of poison bodies.
-
-### 🤖 Real-World Agent Benchmarks
-We benchmarked OptiToken on live Agentic workflows (Hermes) building complete web apps from scratch:
-- **Orbital Dashboard:** The agent built a complex Next.js dashboard, looping through the codebase structure multiple times. OptiToken observed the loops, intercepted the redundant context, and safely pruned **+1,000,000 tokens** in a single session.
-- **CollabBoard Kanban (From Scratch):** Building a React & Node.js WebSocket Kanban board entirely from scratch. Since the code was completely new, the structural L3 Payload Compression alone pruned **511,000 tokens** out of a 6M token session.
+The proxy is **transparent** — drop it in front of any OpenAI-compatible endpoint, no SDK changes.
 
 ---
 
-## 🔐 Security & Privacy Architecture
+## Architecture
 
-We take data security seriously. Here is exactly what we do — and what we don't do — with your data.
-
-### What we guarantee
-
-| Protection | Status | Details |
-|---|---|---|
-| **Encryption in transit** | ✅ Always on | All traffic is encrypted via HTTPS/TLS (Caddy automatic certificate management) |
-| **Encryption at rest** | ✅ Always on | PostgreSQL data is encrypted at the storage level |
-| **API Keys never stored in clear** | ✅ Always on | Your real provider API keys are encrypted with **AES-256-GCM** (authenticated encryption) before being written to both PostgreSQL and Redis, using a shared `ENCRYPTION_KEY` (32-byte hex) configured via `.env`. They are only decrypted in-memory at request time. |
-| **Multi-Tenant Cache Isolation** | ✅ Always on | Each virtual key has a completely isolated cache namespace. Scope dynamic (personal / business / generic) further prevents cross-tenant data leak. Zero risk of one client reading another client's data. |
-| **EU Data Residency** | ✅ Always on | All servers run on Hetzner (Frankfurt, Germany 🇩🇪). Your data never leaves the EU. |
-| **Zero-Log Mode** | ✅ Per-key option | When activated, the proxy only records token counts and latency — the content of prompts and responses is **never written to disk, never cached, never indexed**. Verifiable in the open-source code. |
-| **Loop & L1 cache poisoning guard** | ✅ Always on | Empty-content and `base_resp.status_code != 0` upstream responses are never cached, so a transient provider error can't be replayed to future clients. |
-
-## 🧪 Side-by-Side Playground v3
-
-The Playground (live at `/playground` on the dashboard) is where you actually *feel* the cache working. It is a 2-panel chat UI that fires the **same prompt twice in parallel** — once through OptiToken (cache hits allowed), once directly to the upstream provider (cache forced off via `X-Bypass-Cache: true`). You watch the latency gap open in real time.
-
-Beyond A/B latency, v3 turns the Playground into a **real analytics workbench**:
-
-- **Per-bubble stats footer**: every assistant message gets a coloured cache-level badge (`L0` cyan, `L1` blue, `L2` emerald, `L3` purple, `LOOP` amber, `MISS` zinc), plus inline token counters (`in` / `out`), latency (`ms`), and the dollar amount saved vs. the direct path.
-- **3-up A vs B comparison bar** (above the chat panels): shows `cost saved %`, `latency delta`, `token delta` — emerald when OptiToken wins, amber when it loses, zinc on a tie.
-- **SVG sparklines strip**: inline polyline charts for Opti latency, Direct latency, and cumulative $ saved over the last 50 messages. Zero JS chart library — pure inline `<svg>`.
-- **Artifact Renderer**: auto-detects ```` ```html ````, ```` ```python ````, ```` ```js ````, etc. in the assistant reply and renders them with the right affordances:
-  - **HTML artifacts** render live in a sandboxed `<iframe sandbox>` (no `allow-same-origin` so the artifact can't read your cookies / DOM), with `Copy` (source), `Open` (new tab via Blob URL — works in all browsers, unlike `data:` URIs that Chrome ignores and Safari blocks), `Download` (`.html` file), and `Source` (toggle between rendered preview and raw HTML).
-  - **Code artifacts** get `Copy` and `Download` (`.py` / `.js` / `.ts` / etc.) buttons; the language tag comes from the markdown fence.
-- **Linked / Independent panels**: by default both panels share the same key+model (true A/B). Click `Unlink` in the header to give each panel its own (key, model) — compare two providers side by side, or pin your cheap model on the right and your frontier model on the left.
-- **Export session as JSON**: one click downloads `{settings, messages, sparklines, stats}` — paste into a PR, share with a teammate, or diff two sessions to find regressions.
-- **Clear** button resets both panels and sparkline history.
-
-### What is technically impossible (and why we are honest about it)
-
-**End-to-End Encryption (E2E) is architecturally impossible for a proxy.** To perform semantic caching, context compression, and to forward your request to OpenAI/Anthropic, the proxy *must* be able to read the plaintext prompt. If the payload were encrypted, the proxy could not process it and neither could the AI provider. This is a fundamental constraint of every AI proxy on the market — including LiteLLM, PortKey, and Helicone. We are transparent about it.
-
-What we offer instead is **Operational Confidentiality**: your data never leaves our EU servers, is encrypted at every storage layer, and can be configured to never be persisted at all with **Zero-Log Mode**.
-
----
-
-## ✅ Real benchmark: Phase 2 validated
-
-The cache-preserving L3 architecture (Phases 1 + 2) was validated
-empirically on 2026-06-18 against a Hermes-style workload on the
-production proxy (provider: MiniMax-M3, ~6.5k prompt tokens per
-call, 5 sequential identical requests).
-
-| Metric | Result |
-|--------|--------|
-| **Provider cache hit** (4th call) | **6 550 / 6 564 prompt tokens (99.8%)** served from `cached_tokens` |
-| **Cost reduction on cached call** | $0.00197 → $0.00040 (**5× cheaper**) |
-| **Prefix byte-exactness** | `originalPrompt` MD5 identical across 5 requests (`b84adc764038555f3d039f4331f18a20`) |
-| **Latency on L1 hit** | 8 ms vs 3 492 ms L1-miss (440× faster) |
-| **Prompt compression (when L1 miss)** | 6 564 → 6 564 (no compression in our 4-message Hermes tail) |
-
-The smoking gun is `data_proxy_log.txt` line 2:
 ```
-prompt_tokens: 6564, cached_tokens: 6550
-```
-— 99.8% of the input was served from the provider's own cache
-because the prefix bytes were identical across calls. Without
-the prefix-preserving split, this would have been 0%.
+                     your app / agent / SDK
+                              │
+                              │  HTTP, Authorization: Bearer sk-opti-...
+                              ▼
+              ┌────────────────────────────────┐
+              │       OptiToken Proxy (Go)     │
+              │                                │
+              │  ┌───────┐  ┌──────────────┐   │
+              │  │  L0   │─▶│      L1      │   │
+              │  │ in-fl.│  │ exact match  │   │
+              │  │ dedup │  │  (SHA-256)  │   │
+              │  └───────┘  └──────┬───────┘   │
+              │                    │ miss     │
+              │                    ▼          │
+              │              ┌──────────┐     │
+              │              │    L2    │     │
+              │              │ semantic │     │
+              │              │ (ONNX)   │     │
+              │              └────┬─────┘     │
+              │                   │ miss      │
+              │                   ▼           │
+              │             ┌──────────┐      │
+              │             │    L3    │      │
+              │             │  (tail   │      │
+              │             │compress) │      │
+              │             └────┬─────┘      │
+              │                  │           │
+              └──────────────────┼───────────┘
+                                 │
+                                 ▼
+                ┌────────────────────────────┐
+                │  upstream provider          │
+                │  (OpenAI, Anthropic, etc.)  │
+                └────────────────────────────┘
 
-Raw data, scripts, and analysis live in
-[`test/ab_benchmark_2026_06_18/`](test/ab_benchmark_2026_06_18/).
-
-### Limitations of this benchmark
-
-- Single provider (MiniMax-M3), single model. We have not yet
-  run on Anthropic Claude, which exposes
-  `cache_creation_input_tokens` and `cache_read_input_tokens`
-  separately and would let us measure the cache hit rate
-  directly.
-- 5 sequential identical requests, not a 24-hour soak.
-- Streaming (`stream: true`) was not exercised.
-- The AI scorer (`aiReliabilityScore`) is a heuristic, not a
-  ground-truth quality measurement.
-
----
-
-## 🧊 Cache-Preserving L3 — Compatibility with Provider Prompt Cache
-
-The most subtle cost optimization in any LLM gateway is **provider prompt caching**. Anthropic, OpenAI, and MiniMax all cache the prefix of your requests on their side: pay `cache_write` once, get `cache_read` (typically 10% of the input price) for every follow-up call that shares the same prefix. This is the single biggest savings available for agentic workloads where the system prompt, tool definitions, and prior history are largely identical across calls.
-
-**The problem with naive L3 compression**: it modifies the prompt (strips CoT, truncates tool outputs, normalizes whitespace). Because provider cache lookup is **byte-exact**, any modification invalidates the cache. The agent then pays full input price for the prefix on every call — wiping out most of the cache benefit.
-
-**Our solution** has three phases:
-
-### Phase 1 (shipped): Idempotent L3
-A custom deterministic JSON encoder (`proxy/optiagent/marshal_deterministic.go`) guarantees that two compressions of the same payload produce **byte-identical output**. This is the prerequisite: without it, even if the agent sends the same payload, OptiToken emits different bytes each time and the provider cache miss happens at OptiToken's hand, not the agent's.
-
-The encoder:
-- Emits object keys in **alphabetical order** (Go map iteration is randomized by design)
-- Produces **no whitespace** (compact, byte-stable)
-- Disables **HTML escaping** (`café` stays `café`, not `caf\u00e9`)
-- Handles all numeric types (`int`, `int64`, `float32`, `float64`, etc.) deterministically
-
-Six unit tests in `proxy/optiagent/compressor_test.go` lock this property in (idempotence over 100 calls, key order, compactness, no-HTML-escape, end-to-end compressor stability).
-
-### Phase 2 (in progress): Prefix-preserving split
-Instead of compressing the entire payload, OptiToken will:
-1. Parse the JSON request into a structural tree
-2. Identify the **static prefix** (system prompt + tools + first N "anchor" messages that stay byte-identical across calls)
-3. Compress **only the dynamic tail** (recent user messages, tool results, CoT from old assistant turns)
-4. Re-stitch the two halves at the end without ever touching the prefix bytes
-
-This guarantees the provider cache key never changes between calls, so the agent enjoys `cache_read` pricing on its 38k-token system prompt + history while OptiToken still strips redundant CoT/tool noise from the dynamic tail.
-
-### Phase 3 (planned): Smart `cache_control` injection
-When the upstream is Anthropic, OptiToken will detect prefixes ≥1024 tokens and inject the `cache_control: {type: "ephemeral"}` marker at the right position automatically. For OpenAI and MiniMax (automatic caching), no injection is needed — the byte-exact prefix match already does the job.
-
-### Why we don't do padding (yet)
-The "pad the prefix to 1024/2048 tokens" trick can artificially force cache activation, but it pollutes the agent's attention window and can trigger hallucinations. We're leaving it as a per-key opt-in feature flag (`enableCachePadding`) for users who know their agent loops frequently enough to amortize the `cache_write` cost — default off.
-
-### What you actually save with cache-preserving L3
-On a typical Hermes-style agent with a 38k-token system prompt + tools and a 12k-token rolling history (5k useful + 7k CoT/tool noise):
-
-| Path | Per-request cost (10 calls) |
-|------|---------------------------|
-| Direct to provider (no cache) | 50k × $0.30/1M × 10 = **$0.150** |
-| OptiToken L3 v1 (caches provider) | 50k × $0.30/1M × 10 = **$0.150** (no cache_write amortization) |
-| Provider cache (no OptiToken) | 38k cache_read × $0.06/1M + 12k input × $0.30/1M × 10 = **$0.059** |
-| **OptiToken L3 cache-preserving (Phase 2)** | 38k cache_read + 5k input × $0.30/1M × 10 = **$0.038** |
-
-The cache-preserving combination wins because you get **both** benefits stacked: 88% off the 38k-token prefix (provider cache) AND ~58% off the 12k-token dynamic tail (OptiToken L3).
-
----
-
-## 🔕 Zero-Log Mode — Maximum Privacy for Sensitive Workloads
-
-Zero-Log Mode is a **per-virtual-key privacy flag** you can toggle directly from the OptiToken dashboard. It is designed for teams building on sensitive data — healthcare, legal, finance, government — who need the benefits of an AI gateway (cost control, routing, observability) **without any content ever leaving an audit trail**.
-
-### What happens when Zero-Log Mode is ON?
-
-| Data Type | Normal Mode | Zero-Log Mode |
-|---|---|---|
-| **Prompt content** | ✅ Stored & indexed | 🚫 Never written |
-| **Response content** | ✅ Stored & indexed | 🚫 Never written |
-| **Tool call payloads** | ✅ Stored | 🚫 Never written |
-| **L1 exact cache** | ✅ Active | 🚫 Disabled |
-| **L2 semantic cache** | ✅ Active (vector stored) | 🚫 Disabled (no vector stored) |
-| **Loop cache** | ✅ Active | 🚫 Disabled |
-| **Model Radar samples** | ✅ Collected | 🚫 Not collected |
-| **Token count** | ✅ Recorded | ✅ Recorded |
-| **Latency / Cost** | ✅ Recorded | ✅ Recorded |
-| **Provider / Model / Agent** | ✅ Recorded | ✅ Recorded |
-
-### How to activate it
-
-**Via the OptiToken Dashboard** — toggle the `Zero-Log` switch on any virtual key:
-```
-Settings → Virtual Keys → [your key] → Privacy → Enable Zero-Log Mode
+  Side channel: every decision is logged to Postgres (RequestLog) and
+  an admin dashboard at optitoken.net for inspection.
 ```
 
-**Via the API** (for programmatic key provisioning):
-```bash
-curl -X PATCH https://api.optitoken.net/v1/keys/sk-opti-xxxx \
-  -H "Authorization: Bearer your-admin-token" \
-  -d '{"zero_log": true}'
-```
-
-### Why it matters
-
-Every competitor proxy (LiteLLM, PortKey, Helicone) logs your prompts by default. With OptiToken, **Zero-Log Mode is a first-class, auditable feature built into the core proxy** — not a paid add-on. Since the proxy is open-source, you can verify in the source code exactly where the content bypass logic lives (`proxy/internal/utils/redactor.go` and the `if zeroLog` branches in `proxy.go`).
-
-> **HIPAA / GDPR / SOC2 use-cases**: Zero-Log Mode, combined with Self-Hosting and EU Data Residency, gives your compliance team the strongest possible privacy posture for AI workloads.
+**Tech stack:** Go 1.21 (proxy) · Redis Stack with RediSearch VSS (L2 vector cache, idempotency locks) · Postgres 15 (telemetry, sessions, virtual keys) · Python ONNX embedder (multilingual MiniLM) · Caddy (TLS termination) · Next.js 14 + Prisma (closed-source dashboard).
 
 ---
 
-## 🏗️ Architecture
+## The four caches, in plain English
 
-OptiToken operates using a localized **Redis Stack** with Vector Search (`RedisSearch`) enabled. 
+| Cache | What it does | When it kicks in | Cost saved |
+|-------|--------------|------------------|-----------|
+| **L0** In-flight dedup | Two identical requests arrive at the same time. The first one processes normally. The second one **blocks and waits** for the first one's response (up to 30s). | Race conditions, agent retries, parallel curl. | Full upstream cost on the follower. |
+| **L1** Exact match | The full SHA-256 of the normalized request payload is the cache key. Hit returns the cached response in <2ms. | Cron jobs, scripts that retry the same query, identical tool calls across turns. | Full upstream cost. |
+| **L2** Semantic | Local ONNX model embeds the last user message into a 384-dim vector. If the cosine similarity with any cached vector is above `semantic_tolerance` (default 0.15), that cached response is returned. | "How do I reset my password?" matches "Forgot password, what now?". | Full upstream cost. |
+| **L3** Compression | The system prompt and old tool-call outputs are byte-exact preserved (so the provider's own prompt cache can still hit). Only the last 4 messages — recent user/assistant turns and any old chain-of-thought — are compressed. | Long agent sessions with redundant `<thought>` blocks, repeated tool calls, and stale tool outputs. | 30–70% of the dynamic-tail tokens. |
 
-1. **Request Received**: The Go proxy intercepts standard `/v1/chat/completions` API calls.
-2. **Agent Detection**: The first chunk of the body (User-Agent + system prompt + tool name patterns) is sniffed to identify the originating agent (Hermes, OpenClaw, Claude Code, …) without any client cooperation.
-3. **L1 Cache (Hash)**: Checks for an exact payload match, skipping entirely if a poisoned response is stored.
-4. **L2 Cache (Semantic)**: Extracts the text, runs it through the local ONNX embedding service, and searches Redis for vectors with a Cosine Distance below the configured tolerance.
-5. **Loop Detection**: Records the payload hash in a per-key ZSET; if 3+ identical requests land in 60s, the 3rd+ is served from the loop cache (unless Zero-Log is on).
-6. **L3 Compression**: If all caches miss, structurally compresses the agent's prompt (prune `<thought>` blocks, minify tool outputs) and forwards it to the LLM.
-7. **Smart Routing**: If the requested model is unknown to the provider, silently substitute the key's `defaultModel` and re-stamp the response so the client sees the name it asked for.
-   - **Why `defaultModel` matters per agent SDK**: Each agent SDK names the model differently. Hermes running through LM Studio sends the local model name (e.g. `google/gemma-4-26b-a4b-qat`). OpenClaw often sends Anthropic-style aliases (`claude-3.5-sonnet`). The proxy translates these to the user's `defaultModel` for the upstream call, then re-stamps the response with the agent's original name so the agent stays unaware of the aliasing.
-   - **Best practice**: pick a `defaultModel` at key creation that matches the cheapest model the provider actually serves. Without a `defaultModel` set, requests for unknown model names fail at the upstream instead of being silently routed.
-8. **Streaming**: Responses stream back to the client transparently. The proxy watches for upstream application errors (`base_resp.status_code != 0`, empty `content`) and returns a clean HTTP 4xx to the client instead of a 200 with a poison body.
-9. **Telemetry**: Each request is recorded asynchronously to a Redis Stream (`optitoken:telemetry:logs`, capped at 100k entries) and consumed by a background worker that writes to `RequestLog` in PostgreSQL.
+**When L2 disables itself:** if a request has more than one non-system message (i.e. the agent is mid-conversation), L2 is skipped. Two consecutive turns of an agent have near-identical embeddings, and returning a cached response from a *different* turn would corrupt the conversation state. L1 still runs.
 
-📚 **Deep Dive**: Learn exactly how our high-performance observability engine works without blocking requests in our [Telemetry Architecture Guide](./docs/TELEMETRY.md).
+**When L3 is destructive-free:** L3 only ever touches the last 4 messages. Everything before is byte-exact preserved. The provider's prompt cache (Anthropic, OpenAI, MiniMax) keeps hitting across calls. See [Cache-Preserving L3](#cache-preserving-l3--how-the-cache-still-hits) for the design.
 
 ---
 
-## 🚀 Getting Started (Self-Hosted for Enterprise Compliance)
+## What you actually see
 
-We know you can't send your proprietary source code to a random Cloud Proxy. That's why OptiToken's engine is entirely **Open-Source and Self-Hosted**.
+Every request gets a per-request row in `RequestLog` with the cache hit level, original vs optimized token counts, per-class savings, agent ID, model, latency, payload hash, and session ID. Aggregates are exposed at three endpoints on the proxy itself:
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /healthz` | Liveness check. Returns `{"status":"ok"}`. |
+| `GET /readyz`  | Readiness check. Pings Postgres + Redis. |
+| `GET /metrics` | Prometheus-format metrics (request count, cache hit rate, token savings, p50/p95/p99 latency). |
+
+For the full visual experience — drill-down by agent, session replay, billing analytics, alert rules — use the hosted dashboard at [optitoken.net](https://optitoken.net). It's free during the beta.
+
+---
+
+## Quick start (self-host the proxy only)
+
+The proxy is one Go binary. Redis and the ONNX embedder are siblings in `docker-compose.yml`. Postgres is optional (only needed for the dashboard / telemetry).
 
 ```bash
-git clone https://github.com/dudutti/optitoken.git
-cd optitoken
-
-# Start the Redis Stack, ONNX Embedder, and Go Proxy
-docker compose up -d
+git clone https://github.com/dudutti/Optitoken
+cd Optitoken
+cp .env.example .env  # fill in ENCRYPTION_KEY (32 bytes hex), REDIS_ADDR, etc.
+docker compose up -d --build proxy
 ```
 
-Your proxy is now running on `http://localhost:8080`.
+Verify it's up:
 
-Point your OpenAI SDK to the proxy:
-
-```python
-from openai import OpenAI
-
-client = OpenAI(
-    api_key="your_real_openai_key",
-    base_url="http://localhost:8080/v1"
-)
-
-response = client.chat.completions.create(
-    model="gpt-4o",
-    messages=[{"role": "user", "content": "Hello world!"}]
-)
+```bash
+curl http://localhost:8080/healthz
+# {"status":"ok"}
 ```
 
-For production deployment on a single Hetzner VPS, see [`DEPLOYMENT.md`](./DEPLOYMENT.md) (proxy + Redis + Postgres + Caddy with automatic TLS).
+Point your client at `http://localhost:8080/v1` instead of `https://api.openai.com/v1`. The Authorization header is your virtual key (`sk-opti-...`) — not the upstream provider's key. Virtual keys are configured through the dashboard.
 
 ---
 
-## 💎 OptiToken Enterprise Dashboard (Closed-Source)
+## What "virtual keys" mean
 
-> ⚠️ **The dashboard that ships at [optitoken.net](https://optitoken.net) is proprietary and not included in this repository.** The proxy in this repo is fully self-hostable and works without the dashboard — you get logs, you can use any Redis client to inspect cache state, and the per-key configuration can be managed via direct SQL or by writing a small admin UI on top of the same `ApiKey` table. The dashboard is a SaaS product on top.
+You give the proxy a virtual key (`sk-opti-...`). The proxy looks that key up in Redis to find:
 
-If you want the dashboard experience (real-time charts, agent grouping, side-by-side playground, Zero-Log toggle per key), it's available at [optitoken.net](https://optitoken.net) as a managed SaaS that talks to your self-hosted proxy.
+- The real provider key (stored AES-256-GCM-encrypted at rest, decrypted in-memory only at request time)
+- Provider + default model + fallback provider
+- Per-key cache TTL and semantic tolerance
+- Whether to bypass cache for benchmarking
 
-### What the closed-source dashboard adds on top of the open-core proxy
-
-- 📈 **Real-Time Agent Telemetry**: Watch exactly what your agents are doing live. Stop infinite loops before they burn your budget.
-- 🔑 **Virtual Key Management**: Issue revocable `sk-opti-...` keys to different agent teams without exposing your real OpenAI API keys.
-- 🛠️ **Side-by-Side Playground v3**: Visually A/B test your agent's prompts against the Direct API vs OptiToken cache. Now with **per-bubble stats** (cache level badge, tokens in/out, latency, cost saved), a **3-up A vs B comparison bar** (cost saved %, latency delta, token delta), inline **SVG sparklines** (latency & savings history), and a built-in **Artifact Renderer** that auto-detects ```html` and other code blocks from the assistant reply — HTML artifacts render live in a sandboxed iframe with Copy / Open / Download / Source toggle, code artifacts get syntax-aware display with Copy and Download buttons. Export the whole A/B session as JSON for sharing.
-- 🔁 **Advanced Routing Rules**: Configure complex cascading fallback trees across 5+ different AI providers (Anthropic -> OpenAI -> Local Ollama).
-- 🔒 **Zero-Log Mode Toggle**: Activate per-key content privacy directly from the dashboard. Prompt and response content is **never written to disk, never cached, never indexed** — only cost and performance metrics are kept.
-- 📊 **Model Radar Panel**: Visualize which models are in `learning` vs `ready` state, see the auto-discovered field mappings, and review the sample collection.
-- 🎬 **Session Recording**: Start a `Record session` button that enables `benchmarkMode` on the keys you select, runs your agent for an arbitrary duration, and produces a complete token- and cost-by-class breakdown at the end.
+Virtual keys let you issue a key to a single agent or a single customer, then revoke it without rotating the upstream provider key. The dashboard at optitoken.net is the management UI for this.
 
 ---
 
-## 🔧 Operations
+## Cache-Preserving L3 — how the cache still hits
 
-### Health checks and Prometheus metrics
+This is the most non-obvious part of the design, so it gets its own section.
 
-The proxy exposes three endpoints out of the box on `:8080`:
+**The problem:** Anthropic, OpenAI, and MiniMax all have a *provider-side* prompt cache. They hash your request bytes and serve the same prefix from cache for ~90% off on subsequent calls. But this only works if the prefix bytes are byte-exact. If anything in the prefix changes (a timestamp, whitespace, key reorder), the cache miss happens and you pay full price.
 
-| Endpoint | Purpose | When to use |
-|---|---|---|
-| `GET /healthz` | Process alive (200 if responding, no dependency checks) | Liveness probes, uptime monitors |
-| `GET /readyz`  | 200 if Redis reachable, 503 otherwise | k8s `readinessProbe` — Kubernetes stops sending traffic until this returns 200 |
-| `GET /metrics` | Prometheus text exposition (`Content-Type: text/plain; version=0.0.4`) | Scrape every 15-30s into your Prometheus, then graph in Grafana |
+**The naive mistake:** most "compression" libraries re-encode the entire payload, which changes whitespace, key order, and Unicode escaping. The provider's cache key sees a different hash → cache miss → 5× more expensive than no compression at all. We benchmarked this exact failure mode on 2026-06-18 (see `test/ab_benchmark_2026_06_18/`).
 
-The `/metrics` endpoint exposes:
+**What we do instead:**
 
-- `optitoken_cache_hits_total{cache_level="L0\|L1\|L2\|L3\|LOOP"}` — per-cache-level hit counter
-- `optitoken_tokens_saved_total{cache_level=...}` — tokens saved per cache level
-- `optitoken_cost_saved_total{cache_level=...}` — cost saved in millicents (1/1000 USD) per cache level
-- `optitoken_panics_total{handler=...}` — panic counter per HTTP handler (incremented by the `defer recover()` wrapper — if non-zero, your proxy is panicking on some edge-case payload)
-- `optitoken_upstream_latency_seconds_bucket{le="le_10ms\|le_100ms\|le_500ms\|le_2s\|ge_2s"}` — coarse histogram of upstream provider latency
-- `optitoken_upstream_requests_total` — total upstream calls
-- `optitoken_upstream_errors_total` — upstream calls with HTTP status >= 400
+1. **Phase 1 — Idempotent encoder.** The L3 compressor emits byte-exact output for byte-exact input. Keys are sorted alphabetically, no whitespace, no HTML escaping, deterministic float formatting. See `proxy/optiagent/marshal_deterministic.go` and the 6 unit tests in `compressor_test.go`.
 
-Example scrape config (Prometheus):
+2. **Phase 2 — Prefix-preserving split.** Before compressing, the proxy walks the JSON payload, finds the boundary between the static prefix (system prompt, tool declarations, history older than 4 messages back) and the dynamic tail (recent user/assistant turns). The prefix is left **byte-exact** — the compressor's hands-off. Only the tail is rewritten. The split is implemented as a single-pass character scanner in `proxy/optiagent/prefix_split.go` with 9 unit tests in `prefix_split_test.go`.
 
-```yaml
-scrape_configs:
-  - job_name: optitoken-proxy
-    metrics_path: /metrics
-    static_configs:
-      - targets: ['proxy.internal:8080']
+3. **Phase 3 — Co-located compression.** The tail is wrapped in a synthetic envelope (`{"messages":[<tail>]`), passed through the standard L3 rules (CoT pruning, tool-output truncation, repeated-tool-call collapsing), unwrapped, and re-attached to the byte-exact prefix. The result is a valid JSON document where the first N bytes are byte-exact identical to the input.
+
+**The validation run** (2026-06-18, see `test/ab_benchmark_2026_06_18/data_proxy_log.txt`): we sent 5 identical Hermes-style requests to a MiniMax-M3 upstream. On the 4th request, the provider's response was:
+
+```json
+"usage": {
+  "prompt_tokens": 6564,
+  "completion_tokens": 2,
+  "prompt_tokens_details": { "cached_tokens": 6550 }
+}
 ```
 
-Example Grafana panels:
+6 550 of the 6 564 prompt tokens (99.8%) were served from the provider's own cache. Without the prefix-preserving split, `cached_tokens` would have been 0.
 
-- **Cache hit rate over time**: `sum(rate(optitoken_cache_hits_total[5m])) / sum(rate(optitoken_cache_hits_total[5m]) + rate(optitoken_upstream_requests_total[5m]))`
-- **$ saved per hour**: `sum(increase(optitoken_cost_saved_total[1h])) / 1000` (millicents → dollars)
-- **Panic rate**: `sum(rate(optitoken_panics_total[5m])) > 0` (alert if > 0 for 5min)
-
-### Panic recovery
-
-Every HTTP handler is wrapped in `defer recover()`. A single malformed payload (bad JSON, index-out-of-range, nil deref on a freshly decoded interface) used to crash the whole Go process, which caused Docker to restart it, every in-flight request to be reset, and latency p99 to explode. Now: panic is logged with full stack trace + masked virtual key (first 8 chars + ellipsis), the panic counter increments, and the client gets a clean HTTP 502 instead of a connection reset.
+**What this isn't:** we don't pad the prefix to fake the cache into activating. We don't inject `cache_control` markers on behalf of the user. We don't re-write the payload on the fly. The split is conservative (last 4 messages) — the agent's safety filters re-checking the recent turns still see the same content as the user.
 
 ---
 
-## 🤝 Contributing
+## Security model
 
-We welcome contributions to the **proxy** (`proxy/` directory). Please see [`CONTRIBUTING.md`](./CONTRIBUTING.md) for details on how to set up the Go environment for local development, run the test suite, and submit a PR.
+- **Real provider keys** are stored AES-256-GCM-encrypted (authenticated encryption, 12-byte random IV, 16-byte auth tag) under a shared `ENCRYPTION_KEY` (32 bytes hex) configured in `.env`. They are decrypted only in-memory at request time, and only on the goroutine handling the matching virtual key.
+- **Virtual keys** are the only thing client code ever sees. They are checked against Redis with a single HGETALL — no database round-trip on the hot path.
+- **Multi-tenant isolation:** the L2 semantic cache is segmented by the `user` field in the OpenAI payload when the `isolate_cache_by_user` flag is on for a key. Without that flag, two different end-users of the same virtual key share the L2 cache (typical for an internal tool where one human uses it).
+- **No telemetry by default** for keys marked `zero_log`. The proxy still routes the request, still applies the cache, but writes nothing to Postgres for that request.
 
-The dashboard (`dashboard/`) is a closed-source product and is not part of this repository. If you want to build a custom admin UI on top of the open-core proxy, all the data you need is in the `RequestLog` and `ApiKey` tables — write your own Next.js / Rails / whatever client.
+We do not claim GDPR-readiness or any specific compliance certification. The proxy runs on whatever infrastructure you deploy it to. EU data residency is a deployment choice, not a feature.
 
-## 📄 License
+---
 
-The **OptiToken Proxy** is open-sourced under the MIT License.
-The **OptiToken Dashboard** is a proprietary, closed-source product available as a SaaS at [optitoken.net](https://optitoken.net).
+## Telemetry
+
+Per request, persisted to `RequestLog`:
+
+| Column | Meaning |
+|--------|---------|
+| `cacheLevel` | `MISS`, `L0`, `L1`, `L2`, `L3`, `LOOP`, `BYPASS` |
+| `promptTokensOrig` / `promptTokensOpt` | Token counts measured by the upstream |
+| `savingsInputFresh` / `savingsCacheRead` / `savingsCacheCreation` / `savingsOutput` | Per-class dollar savings, computed against the `ProviderModel` pricing table |
+| `cacheCreationTokens` / `cacheReadTokens` / `cacheHitTokens` / `cacheMissTokens` | When the upstream exposes them (Anthropic, OpenAI) |
+| `durationMs` | Wall-clock end-to-end |
+| `agentId` / `agentLabel` | Detected from User-Agent and system prompt heuristics |
+| `sessionId` | Set by the dashboard's Record Session feature (see below) |
+| `payloadHash` | SHA-256 of the original payload — useful for grouping identical requests in `Most Expensive Prompts` |
+
+---
+
+## Record Session
+
+A feature on the hosted dashboard that lets you tag every request made with one of your virtual keys during a window of time, so you can later review the full per-class breakdown for that window.
+
+The proxy implements the tagging with a Redis lookup: when the dashboard starts a session, it writes `optitoken:session:vk:<vk>` to Redis with a 24h TTL. The proxy checks this on every request. If a tag is present, it overrides the per-request `sessionId` for that RequestLog row. When the session stops, the dashboard deletes the key. There is no need to touch the agent — Hermes, Claude Code, raw curl, anything that uses the virtual key is recorded transparently.
+
+To use it, log in to [optitoken.net](https://optitoken.net), click **Record Session**, run your agent workload, click **Stop**. The full session summary includes L0/L1/L2/L3/LOOP/MISS counts, per-class savings, by-provider / by-model / by-agent breakdowns, and the total cost impact. Every session is saved and revisitable from `Admin → Session History`.
+
+The implementation lives in:
+- `proxy/internal/services/auth.go` — `LookupSessionTag` (the Redis read)
+- `proxy/internal/handlers/proxy.go` — fallback from header to Redis
+- The dashboard route `app/api/sessions/record/route.ts` (start/stop) — closed source.
+
+---
+
+## Limitations and known gaps
+
+We are rigorous about what this project does and does not do.
+
+- **Anthropic and OpenAI are not in our test loop yet.** The MiniMax-M3 benchmark in `test/ab_benchmark_2026_06_18/` is the only real-provider A/B we have. The 99.8% cache hit number is from MiniMax specifically. We expect similar behavior on Anthropic Claude (which exposes `cache_creation_input_tokens` / `cache_read_input_tokens`) and OpenAI (which exposes `cached_tokens`), but the data isn't here yet.
+- **Padding to force cache activation is not implemented.** Some providers need 1024+ tokens of prefix to activate their cache. We considered injecting dummy tool calls or filler text, but rejected it: it pollutes the agent's context window. It's an opt-in feature flag reserved for users who know their agent loops frequently enough to amortize the `cache_write` cost. The flag is not exposed yet.
+- **Streaming is partially measured.** The benchmark in `test/` uses `stream: false` for both control and optimized. SSE streaming cache behavior is not characterized.
+- **The "L0 Coalesced" leader does not share its result with cross-process peers.** Each Go process holds its own in-flight dedup map. Behind a load balancer with N replicas, you can have N copies of the same in-flight request. This is fine for the single-binary docker-compose setup. A distributed lock (Redis SETNX) would be the next step, but we have not implemented it because the single-replica setup is what we run.
+- **No SSE-through cache.** Streaming responses are not cached. They bypass L1/L2/L3 and go straight upstream. This is by design — partial streams are awkward to cache, and most streaming workloads (chat UX) are inherently one-shot.
+- **Multi-region replication is not implemented.** The proxy is stateful (Redis cache, Postgres telemetry). Run a single region, or accept that the cache hit rate will reset across regions.
+- **No Python or Node SDK.** Bring-your-own HTTP client. The proxy is plain OpenAI-compatible HTTP.
+
+---
+
+## Repository layout
+
+```
+Optitoken/
+├── proxy/                          ← Open source (MIT). This is the binary.
+│   ├── cmd/server/                 ← main.go entry point
+│   ├── internal/
+│   │   ├── handlers/proxy.go       ← the request pipeline
+│   │   ├── optiagent/              ← L3 compression, agent detection, session split
+│   │   │   ├── engine.go
+│   │   │   ├── compressor.go
+│   │   │   ├── compressor_test.go
+│   │   │   ├── marshal_deterministic.go
+│   │   │   ├── prefix_split.go
+│   │   │   ├── prefix_split_test.go
+│   │   │   └── agent_detector.go
+│   │   ├── services/
+│   │   │   ├── auth.go             ← virtual key lookup + AES-GCM decrypt + session tag
+│   │   │   ├── pricing.go
+│   │   │   ├── savings.go
+│   │   │   └── redis.go
+│   │   ├── workers/
+│   │   │   ├── telemetry.go        ← RequestLog writer
+│   │   │   ├── stats.go
+│   │   │   ├── pricing.go
+│   │   │   └── ...
+│   │   └── db/                     ← postgres + redis pools
+│   ├── onnx-embedder/              ← Python service: MiniLM embedding
+│   ├── seeds/                       ← SQL seed data (models, default keys)
+│   ├── docker-compose.yml
+│   ├── Dockerfile
+│   └── README.md                   ← proxy-specific build instructions
+│
+├── test/                            ← Open source. Reproducible test data.
+│   ├── README.md
+│   └── ab_benchmark_2026_06_18/    ← Hermes workload, 5 identical requests, raw logs
+│       ├── data_benchmarklog.csv
+│       ├── data_benchmarklog.json
+│       ├── data_proxy_log.txt
+│       └── 01..07 *.sh             ← reproducible shell scripts (no creds in repo)
+│
+└── README.md                        ← this file
+```
+
+The hosted dashboard at [optitoken.net](https://optitoken.net) is closed-source SaaS. It is not in this repository.
+
+---
+
+## Commit history (recent)
+
+```
+3c9f771 feat(proxy): server-side session recording via Redis tag lookup
+92d0c89 docs(test): add A/B benchmark data validating Phase 2 cache-preserving L3
+333c4a1 feat(proxy): prefix-preserving L3 split (Phase 2 of cache-preserving L3)
+545b6df docs(README): document the cache-preserving L3 architecture
+08a36f9 feat(proxy): idempotent L3 + redis persistence
+cda3239 fix(proxy): persist payloadHash + sessionId + agentId via two-query INSERT
+28865f5 feat(proxy): P1.4 — /healthz, /readyz, /metrics endpoints + observability
+00c6977 docs: clarify defaultModel requirement per agent SDK (Hermes, OpenClaw)
+a6a57d8 feat(proxy): P0.2 panic recovery + P1 logOnce on missing pricing
+9b5c1bc Initial commit: OptiToken proxy v1.5
+```
+
+The first 6 commits on the list are the work that shipped the cache-preserving L3 architecture end-to-end: idempotent encoder, prefix split, server-side session recording, and the A/B benchmark that validates the design.
+
+---
+
+## License
+
+MIT. The proxy is open source. The hosted dashboard at [optitoken.net](https://optitoken.net) is a separate commercial product.
+
+---
+
+## — Version française —
+
+### OptiToken, en une phrase
+
+Un proxy LLM open source qui transforme le trafic de vos agents en un flux mesurable et optimisable.
+
+### Le problème
+
+Les agents répètent. Beaucoup. Un agent qui parcourt un codebase va relire les mêmes fichiers, refaire les mêmes tool calls, et réémettre les mêmes blocs `<thought>` pendant des centaines de tours. Un proxy naïf relaie tout au provider, qui facture tout.
+
+OptiToken fait trois choses en un seul binaire :
+
+1. **Un cache à 4 niveaux** (L0 dédup en vol → L1 exact → L2 sémantique → L3 compression) pour réduire le trafic vers le provider.
+2. **Une télémétrie par requête** pour voir ce qui a hit, ce qui a miss, et à quel coût.
+3. **Un détecteur d'agent** qui désactive le cache quand la charge est un agent long-running — sans ça, on renverrait des réponses d'un tour précédent et on corromprait le contexte.
+
+Le proxy est **transparent** : on le branche devant n'importe quel endpoint OpenAI-compatible, sans changer le code de l'app cliente.
+
+### Les quatre caches
+
+| Cache | Ce qu'il fait | Quand il s'active | Coût économisé |
+|-------|---------------|-------------------|----------------|
+| **L0** Déduplication en vol | Deux requêtes identiques arrivent en même temps. La première traite normalement, la seconde **se met en attente** (jusqu'à 30s) et récupère la réponse de la première. | Retries, courses entre agents, curl en parallèle. | Coût upstream complet sur la suiveuse. |
+| **L1** Exact | Le SHA-256 du payload normalisé est la clé de cache. Hit en <2ms. | Cron jobs, scripts qui relancent la même requête, tool calls identiques entre tours. | Coût upstream complet. |
+| **L2** Sémantique | Modèle ONNX local qui vectorise le dernier message user. Si la similarité cosinus dépasse `semantic_tolerance` (défaut 0.15), la réponse cachée est renvoyée. | "Comment réinitialiser mon mot de passe ?" matche "J'ai oublié mon mot de passe, que faire ?". | Coût upstream complet. |
+| **L3** Compression | Le system prompt et les anciens tool outputs sont préservés byte-exact (pour que le cache provider continue de fonctionner). Seuls les 4 derniers messages sont compressés. | Sessions d'agent longues avec des blocs `<thought>` redondants, tool calls répétés, tool outputs devenus obsolètes. | 30–70% des tokens de la queue dynamique. |
+
+### Cache-Preserving L3
+
+C'est la partie la moins évidente du design, et la plus subtile. Anthropic, OpenAI et MiniMax ont tous un **cache provider** : ils hashent les bytes de votre requête et servent le préfix identique depuis leur cache pour ~90% de réduction sur les requêtes suivantes. Mais ce cache ne fonctionne que si le préfix est **byte-exact**. Si quoi que ce soit change dans le préfix (un timestamp, un whitespace, un ré-ordre de clés JSON), c'est cache miss et vous payez plein pot.
+
+L'erreur classique : un middleware de compression naïf ré-encode le payload complet, ce qui change les whitespaces et l'ordre des clés. Le provider voit un hash différent → cache miss → vous payez **5× plus cher** que sans compression. Nous avons mesuré cet échec en conditions réelles le 2026-06-18 (voir `test/ab_benchmark_2026_06_18/`).
+
+Ce qu'on fait à la place :
+- **Phase 1** : un encodeur JSON déterministe. Le payload ré-encodé est byte-exact pour un input byte-exact. (Voir `proxy/optiagent/marshal_deterministic.go` et les 6 tests unitaires dans `compressor_test.go`.)
+- **Phase 2** : un split qui sépare le préfixe statique (system prompt, history ancienne) de la queue dynamique (tours récents). Le préfixe est laissé byte-exact. Seule la queue est compressée. (Voir `proxy/optiagent/prefix_split.go` et les 9 tests dans `prefix_split_test.go`.)
+- **Phase 3** : la queue est enveloppée dans un `{"messages":[<queue>]` synthétique, passée dans le compresseur standard, puis ré-assemblée. Le résultat est un document JSON valide où les N premiers octets sont byte-exact identiques à l'input.
+
+**La mesure** (logs proxy, 4e requête sur 5) : `prompt_tokens: 6564, cached_tokens: 6550`. 99.8% du prompt servi depuis le cache provider.
+
+### Ce qu'on ne fait PAS
+
+- On ne pad pas le préfixe pour forcer le cache. Ça pollue la fenêtre d'attention de l'agent. C'est un opt-in désactivé par défaut.
+- On n'injecte pas de `cache_control` markers à la place de l'utilisateur. L'agent décide.
+- On ne ré-écrit pas le payload en stream. Le streaming bypasse L1/L2/L3.
+- On ne supporte pas encore Anthropic/OpenAI dans nos benchmarks A/B. Seul MiniMax-M3 a été mesuré. On attend des résultats similaires, mais on ne l'affirme pas.
+
+### Record Session
+
+Une feature du dashboard hosted qui permet de tagger toutes les requêtes faites avec une de vos virtual keys pendant une fenêtre de temps, pour revoir ensuite la décomposition complète par classe.
+
+Le tagging se fait côté proxy via un lookup Redis : quand le dashboard démarre une session, il écrit `optitoken:session:vk:<vk>` dans Redis avec un TTL de 24h. Le proxy vérifie cette clé à chaque requête. Si elle est présente, elle écrase le `sessionId` de la RequestLog. Quand la session se termine, le dashboard supprime la clé. Pas besoin de toucher à l'agent — Hermes, Claude Code, curl brut, tout ce qui utilise la virtual key est enregistré de façon transparente.
+
+L'implémentation est dans `proxy/internal/services/auth.go` (`LookupSessionTag`) et `proxy/internal/handlers/proxy.go` (fallback header → Redis).
+
+### Limitations assumées
+
+- **Pas de benchmark A/B sur Anthropic/OpenAI** : seul MiniMax-M3 a été mesuré en conditions réelles. Le 99.8% cache hit vient de ce seul provider.
+- **Pas de padding forcé** : risque d'hallucination de l'agent, opt-in désactivé.
+- **Pas de cache SSE** : les streams bypasse le cache, par design.
+- **Pas de SDK Python/Node** : bring-your-own HTTP client.
+- **Pas de multi-région** : le proxy est stateful (Redis + Postgres). Run single region.
+- **Pas de certification GDPR** : on n'affirme rien. Le proxy tourne sur l'infra que vous choisissez. EU data residency est un choix de déploiement.
+
+### Démarrage rapide
+
+```bash
+git clone https://github.com/dudutti/Optitoken
+cd Optitoken
+cp .env.example .env
+docker compose up -d --build proxy
+```
+
+Vérification :
+
+```bash
+curl http://localhost:8080/healthz
+# {"status":"ok"}
+```
+
+### Licence
+
+MIT. Le proxy est open source. Le dashboard hosted sur [optitoken.net](https://optitoken.net) est un produit commercial séparé.
