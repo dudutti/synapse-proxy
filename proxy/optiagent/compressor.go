@@ -113,8 +113,16 @@ func CompressPayload(payload []byte) ([]byte, error) {
 		}
 	}
 
-	// Re-encode preserving all original fields
-	return json.Marshal(genericPayload)
+	// Re-encode preserving all original fields.
+	//
+	// We use the deterministic encoder (not stdlib json.Marshal) so
+	// that two calls to CompressPayload with the same input produce
+	// byte-identical output. This is required for provider prompt
+	// caching: Anthropic / OpenAI / MiniMax hash the request
+	// bytes for cache lookup, and any whitespace / key-order drift
+	// would invalidate the cache silently. See
+	// marshal_deterministic.go for the rationale.
+	return marshalDeterministic(genericPayload)
 }
 
 // ModelRouting rewrites payload to a budget-friendly model based on heuristics
