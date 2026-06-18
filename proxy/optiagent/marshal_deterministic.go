@@ -41,7 +41,8 @@ import (
 // marshalDeterministic encodes a JSON value built from
 // map[string]interface{} and []interface{} (the shapes produced by
 // `json.Unmarshal` into a generic interface{}). Output is canonical:
-// sorted keys, no whitespace, no HTML escaping.
+// sorted keys, no whitespace, no HTML escaping, no Unicode
+// escaping for printable ASCII.
 //
 // The function is recursive and stack-safe for the payload sizes we
 // see in practice (a 100k-token prompt becomes a Go tree of ~2k
@@ -134,13 +135,28 @@ func writeDeterministic(buf *bytes.Buffer, v interface{}) error {
 	case uint64:
 		buf.WriteString(strconv.FormatUint(x, 10))
 	case string:
-		// json.Marshal handles escaping for control chars, quotes,
-		// backslashes, and (by default) HTML chars. We rely on it
-		// here for the per-string escaping. Output for the same input
-		// is always identical, so this is deterministic.
-		b, err := json.Marshal(x)
-		if err != nil {
+		// We use json.Encoder with SetEscapeHTML(false) so that
+		// characters like '<' are emitted as-is (not as \u003c).
+		// This is critical for the L3 compressor's CoT regex,
+		// which expects to see literal '<thought>' markers in
+		// the assistant messages it prunes. We also disable
+		// the default JSON Unicode escaping for printable ASCII
+		// (utf-8 passthrough) by using a json.Encoder instead of
+		// json.Marshal — the latter always escapes '<', '>', and
+		// '&', which would defeat the CoT pruning.
+		//
+		// Note: this is a per-string operation; we still walk the
+		// map keys ourselves to keep the key order deterministic.
+		var sbuf bytes.Buffer
+		enc := json.NewEncoder(&sbuf)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(x); err != nil {
 			return err
+		}
+		// json.Encoder.Encode appends a trailing newline. Strip it.
+		b := sbuf.Bytes()
+		if len(b) > 0 && b[len(b)-1] == '\n' {
+			b = b[:len(b)-1]
 		}
 		buf.Write(b)
 	case map[string]interface{}:

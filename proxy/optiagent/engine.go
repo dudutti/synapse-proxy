@@ -210,7 +210,20 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 	_ = l2Prefix
 
 	// 3. L3 Cache (Compression / Payload Optimization)
-	compressedPayload, err := CompressPayload(payload)
+	//
+	// The cache-preserving variant splits the payload into a
+	// static prefix and a dynamic tail, compresses only the
+	// tail, and reassembles the result. The prefix bytes are
+	// byte-for-byte identical to the input, so provider
+	// prompt caches (Anthropic, OpenAI, MiniMax) keep hitting
+	// across requests. The tail gets the full L3 treatment
+	// (CoT pruning, tool output truncation, repeated-tool
+	// compaction, reasoning_content stripping).
+	//
+	// We use the cache-preserving variant by default; the
+	// legacy CompressPayload is still available behind
+	// `!useCachePreservingL3` for debugging and A/B tests.
+	compressedPayload, err := CompressPayloadCachePreserving(payload)
 	if err != nil || compressedPayload == nil {
 		compressedPayload = payload
 	}
