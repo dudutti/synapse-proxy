@@ -1,0 +1,222 @@
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+enum Role {
+  USER
+  SUPERADMIN
+}
+
+model User {
+  id               String    @id @default(cuid())
+  email            String    @unique
+  passwordHash     String
+  name             String?
+  role             Role      @default(USER)
+  emailVerified    DateTime?
+  
+  stripeCustomerId String?   @unique
+  stripePriceId    String?
+  stripeSubscriptionId String? @unique
+  stripeCurrentPeriodEnd DateTime?
+
+  tier             String    @default("FREE") // FREE, TIER1, TIER2
+  currentMonthTokens Int     @default(0)
+
+  apiKeys          ApiKey[]
+  createdAt        DateTime  @default(now())
+}
+
+model VerificationToken {
+  id         String   @id @default(cuid())
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+model PasswordResetToken {
+  id         String   @id @default(cuid())
+  email      String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([email, token])
+}
+
+model ApiKey {
+  id                 String         @id @default(cuid())
+  userId             String
+  user               User           @relation(fields: [userId], references: [id])
+  virtualKey         String         @unique // sk-opti-...
+  provider           String         // e.g., 'openai', 'anthropic'
+  realKeyEnc         String         // Encrypted real key
+  fallbackProvider   String?        // Provider to use if primary fails
+  fallbackKeyEnc     String?        // Encrypted fallback key
+  fallbackModel      String?        // Specific model to use if fallback triggers
+  defaultModel       String?        // Specific model to force for this key (e.g. abab6.5s-chat)
+  monthlyBudget      Float          @default(100.0)
+  currentUsage       Float          @default(0.0)
+  cacheTtl           Int            @default(86400) // Default 24 hours
+  benchmarkMode      Boolean        @default(false) // If true, run benchmark eval on every request
+  semanticTolerance  Float          @default(0.15)
+  isolateCacheByUser Boolean        @default(false) // Whether to isolate cache by 'user' payload field
+  zeroLog            Boolean        @default(false) // Zero-Log Mode: never persist prompt/response content. Token counts and metadata only.
+  
+  // Firewall & Optimization Options
+  enableL1           Boolean        @default(true)
+  enableL2           Boolean        @default(true)
+  enableL3           Boolean        @default(true)
+  killSwitch         Boolean        @default(false)
+  sessionTokenLimit  Int?
+  allowedTools       String?        @db.Text
+  blockUnknownTools  Boolean        @default(false)
+  redactPII          Boolean        @default(false)
+
+  createdAt          DateTime       @default(now())
+  requestLogs        RequestLog[]
+  benchmarkLogs      BenchmarkLog[]
+}
+
+model RequestLog {
+  id              String   @id @default(cuid())
+  apiKeyId        String
+  apiKey          ApiKey   @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  provider        String
+  model           String
+  promptTokensOrig     Int @default(0)
+  completionTokensOrig Int @default(0)
+  promptTokensOpt      Int @default(0)
+  completionTokensOpt  Int @default(0)
+  reasoningTokens  Int @default(0)
+  cacheCreationTokens Int @default(0) // Anthropic: cache_creation_input_tokens
+  cacheReadTokens     Int @default(0) // Anthropic cache_read_input_tokens + OpenAI cached_tokens
+  cacheHitTokens      Int @default(0) // DeepSeek prompt_cache_hit_tokens + Google cachedContentTokenCount
+  cacheMissTokens     Int @default(0) // DeepSeek prompt_cache_miss_tokens
+  costSaved       Float
+  savingsInputFresh    Float @default(0) // $ saved on fresh input tokens (prompt_orig - cache classes - prompt_opt)
+  savingsCacheRead     Float @default(0) // $ saved on cache_read tokens (delta vs input rate)
+  savingsCacheCreation Float @default(0) // $ delta on cache_creation tokens (positive = L3 reduced write cost; negative = L3 increased it)
+  savingsOutput        Float @default(0) // $ saved on completion tokens
+  cacheLevel      String   // "NONE", "L1", "L2", "L3"
+  durationMs      Int
+  payloadHash     String?  // SHA-256 hex of the original request body (filled by proxy L0/L1 path)
+  originalPayload String?  @db.Text
+  optimizedPayload String? @db.Text
+  responsePayload String?  @db.Text // The raw upstream provider response (JSON or SSE final chunk)
+  agentId         String   @default("") // detected agent id (hermes, openclaw, chat-direct, ...)
+  agentLabel      String   @default("") // human-readable label with emoji
+  sessionId       String   @default("") // session/thread/conversation id, "" if unknown
+
+  // Multiturn tracking. We compute these server-side from the
+  // request body so the dashboard can group requests by natural
+  // conversation even when the agent never sent an explicit
+  // sessionId. turnCount=0 means a one-shot request; turnCount>=1
+  // means the agent is in the middle of (or finishing) a
+  // conversation. convSignature is a short hash of (system prompt
+  // + tool names); two requests with the same signature are very
+  // likely part of the same conversation.
+  turnCount       Int      @default(0)
+  convSignature   String   @default("")
+
+  toolCalls       String?  @db.Text // Store JSON of detected tool calls
+  isSimulated     Boolean  @default(false) // True if the cache/compression was bypassed but savings were simulated
+  killSwitchFired Boolean  @default(false) // True if this request triggered the loop kill switch
+
+  createdAt       DateTime @default(now())
+
+  @@index([agentId])
+  @@index([sessionId])
+  @@index([agentId, createdAt])
+}
+
+model BenchmarkLog {
+  id                 String   @id @default(cuid())
+  apiKeyId           String
+  apiKey             ApiKey   @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  originalPrompt     String
+  optimizedPrompt    String
+  originalResponse   String
+  optimizedResponse  String
+  latencyOriginalMs  Int
+  latencyOptimizedMs Int
+  promptTokensOrig     Int @default(0)
+  completionTokensOrig Int @default(0)
+  promptTokensOpt      Int @default(0)
+  completionTokensOpt  Int @default(0)
+  aiReliabilityScore Int      // 0 to 100
+  aiFeedback         String
+  createdAt          DateTime @default(now())
+}
+
+model ProviderModel {
+  id                       String   @id @default(cuid())
+  provider                 String
+  modelName                String
+  costPromptPer1M          Float
+  costCompletionPer1M      Float
+  costCachedInputPer1M     Float?  // Cache hit rate: 0.10x input for Anthropic/OpenAI/Google, 0.02x for DeepSeek
+  costCacheWritePer1M      Float?  // Cache write rate: 1.25x (Anthropic 5m) or 2x (1h), =prompt for OpenAI/DeepSeek
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+
+  @@unique([provider, modelName])
+}
+
+model Prospect {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+}
+
+model SystemConfig {
+  id               String   @id @default("global") // We'll only have one row
+  registrationOpen Boolean  @default(false)
+  updatedAt        DateTime @updatedAt
+}
+
+model EmailTemplate {
+  id        String   @id // e.g. WELCOME_VERIFY, PASSWORD_RESET
+  subject   String
+  html      String
+  updatedAt DateTime @updatedAt
+}
+
+model AlertRule {
+  id          String   @id @default(cuid())
+  name        String   // human label, e.g. "Panic rate > 0"
+  metric      String   // panic_rate | error_rate | cache_hit_rate | upstream_latency_p95 | pricing_gaps
+  operator    String   // gt | lt | gte | lte
+  threshold   Float    // value to compare against
+  windowSec   Int      @default(300) // rolling window for the metric evaluation
+  enabled     Boolean  @default(true)
+  severity    String   @default("warning") // info | warning | critical
+  notifyEmail String?  // optional email recipient
+  notifySlack String?  // optional Slack webhook URL
+  lastFiredAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  events      AlertEvent[]
+}
+
+model AlertEvent {
+  id          String   @id @default(cuid())
+  ruleId      String
+  rule        AlertRule @relation(fields: [ruleId], references: [id], onDelete: Cascade)
+  observedValue Float
+  threshold   Float
+  message     String   // pre-formatted text for the email/Slack notification
+  acknowledged Boolean  @default(false)
+  acknowledgedAt DateTime?
+  acknowledgedBy String?
+  firedAt     DateTime @default(now())
+
+  @@index([firedAt])
+  @@index([acknowledged, firedAt])
+}
