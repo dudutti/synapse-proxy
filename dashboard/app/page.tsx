@@ -643,7 +643,7 @@ export default function Dashboard() {
                   // The /api/analytics/session endpoint expects
                   // the raw session id (or conv signature), so we
                   // strip the prefix here.
-                  const rawKey = groupKey.replace(/^(session|agent|model):/, "");
+                  const rawKey = groupKey.replace(/^(session|agent|model|legacy):/, "");
                   setSessionId(snapshot.groupBy === "session" ? rawKey : null);
                   setSessionStartTime(snapshot.startedAt);
 
