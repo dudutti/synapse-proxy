@@ -1,13 +1,13 @@
-# OptiToken Deployment Guide
+# Synapse Proxy Deployment Guide
 
-This guide outlines how to deploy OptiToken for a production environment capable of handling thousands of requests per second.
+This guide outlines how to deploy Synapse Proxy for a production environment capable of handling thousands of requests per second.
 
 ## 1. Environment Setup
 
 You need to define the following environment variables in a `.env` file:
 ```env
 # Database & Redis
-DATABASE_URL="postgresql://user:password@host:5432/optitoken_db?schema=public&sslmode=require"
+DATABASE_URL="postgresql://user:password@host:5432/Synapse Proxy_db?schema=public&sslmode=require"
 REDIS_URL="redis://user:password@host:6379"
 
 # Security

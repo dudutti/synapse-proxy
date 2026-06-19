@@ -1,4 +1,4 @@
-package optiagent
+﻿package optiagent
 
 // Tests for the deterministic JSON marshaller and the L3 compressor's
 // idempotence property. Run with `go test ./optiagent/...`.
@@ -12,7 +12,7 @@ import (
 // TestMarshalDeterministic_Idempotent asserts that calling
 // marshalDeterministic twice on the same value produces identical
 // bytes. This is the property that allows provider prompt caching to
-// work across multiple OptiToken L3 calls.
+// work across multiple Synapse Proxy L3 calls.
 func TestMarshalDeterministic_Idempotent(t *testing.T) {
 	// Build a representative L3-compressed payload: a chat request
 	// with a long system prompt, several tool messages, and a few
@@ -34,7 +34,7 @@ func TestMarshalDeterministic_Idempotent(t *testing.T) {
 			},
 			map[string]interface{}{
 				"role":    "tool",
-				"content": "old output truncated by OptiToken L3…",
+				"content": "old output truncated by Synapse Proxy L3â€¦",
 				"name":    "read_file",
 			},
 			map[string]interface{}{
@@ -110,15 +110,15 @@ func TestMarshalDeterministic_Compact(t *testing.T) {
 
 // TestMarshalDeterministic_NoHTMLEscape asserts that non-ASCII
 // characters are emitted as-is and not HTML-escaped. Provider caches
-// hash the raw bytes, so we want "café" -> "café", not
+// hash the raw bytes, so we want "cafÃ©" -> "cafÃ©", not
 // "caf\u00e9".
 func TestMarshalDeterministic_NoHTMLEscape(t *testing.T) {
-	v := map[string]interface{}{"msg": "café résumé"}
+	v := map[string]interface{}{"msg": "cafÃ© rÃ©sumÃ©"}
 	out, err := marshalDeterministic(v)
 	if err != nil {
 		t.Fatalf("marshal failed: %v", err)
 	}
-	if !bytes.Contains(out, []byte("café")) {
+	if !bytes.Contains(out, []byte("cafÃ©")) {
 		t.Fatalf("expected raw UTF-8 in output, got %s", out)
 	}
 	if bytes.Contains(out, []byte(`\u00`)) {

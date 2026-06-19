@@ -9,8 +9,8 @@ import (
 	"sort"
 	"time"
 
-	"optitoken/internal/db"
-	"optitoken/internal/workers"
+	"synapse-proxy/internal/db"
+	"synapse-proxy/internal/workers"
 )
 
 type FetchModelsRequest struct {

@@ -72,6 +72,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     if (body.enableL2 !== undefined) dataToUpdate.enableL2 = !!body.enableL2;
     if (body.enableL3 !== undefined) dataToUpdate.enableL3 = !!body.enableL3;
     if (body.killSwitch !== undefined) dataToUpdate.killSwitch = !!body.killSwitch;
+    if (body.fingerprintLoopDetect !== undefined) dataToUpdate.fingerprintLoopDetect = !!body.fingerprintLoopDetect;
     if (body.sessionTokenLimit !== undefined) dataToUpdate.sessionTokenLimit = body.sessionTokenLimit ? parseInt(body.sessionTokenLimit, 10) : null;
     if (body.allowedTools !== undefined) dataToUpdate.allowedTools = body.allowedTools;
     if (body.blockUnknownTools !== undefined) dataToUpdate.blockUnknownTools = !!body.blockUnknownTools;

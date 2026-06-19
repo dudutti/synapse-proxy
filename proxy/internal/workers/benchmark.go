@@ -1,4 +1,4 @@
-package workers
+﻿package workers
 
 import (
 	"context"
@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"time"
 
-	"optitoken/internal/db"
-	"optitoken/internal/utils"
+	"synapse-proxy/internal/db"
+	"synapse-proxy/internal/utils"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -19,14 +19,14 @@ func ConsumeBenchmarkWorker() {
 	rdb := db.GetRedis()
 	postgresDB := db.GetDB()
 
-	rdb.XGroupCreateMkStream(ctx, "optitoken:benchmark_logs", "benchmark_group", "0").Err()
+	rdb.XGroupCreateMkStream(ctx, "synapse:benchmark_logs", "benchmark_group", "0").Err()
 	log.Println("Background Benchmark Worker Started")
 
 	for {
 		res, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    "benchmark_group",
 			Consumer: "worker-1",
-			Streams:  []string{"optitoken:benchmark_logs", ">"},
+			Streams:  []string{"synapse:benchmark_logs", ">"},
 			Count:    5,
 			Block:    2 * time.Second,
 		}).Result()
@@ -82,7 +82,7 @@ func ConsumeBenchmarkWorker() {
 			_, err = postgresDB.Exec(query, vk, origPrompt, optPrompt, origResp, optResp, origMs, optMs, promptOrig, completionOrig, promptOpt, completionOpt, score, feedback)
 
 			if err == nil {
-				rdb.XAck(ctx, "optitoken:benchmark_logs", "benchmark_group", msg.ID)
+				rdb.XAck(ctx, "synapse:benchmark_logs", "benchmark_group", msg.ID)
 			} else {
 				log.Printf("Benchmark DB Insert failed: %v", err)
 			}

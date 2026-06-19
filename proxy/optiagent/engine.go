@@ -80,7 +80,7 @@ func extractTextForEmbedding(payload []byte) (string, bool, bool) {
 		// Disable L2 (semantic) cache when the request looks like part
 		// of a long agentic trajectory: the embeddings of consecutive
 		// user prompts in a coding / agentic loop are very close
-		// (same verbs: "ajoute", "refactor", "test", …) so the L2
+		// (same verbs: "ajoute", "refactor", "test", â€¦) so the L2
 		// cache will return responses from a *different* turn and
 		// break the agent's context. We let L3 (compression) handle
 		// these requests instead.
@@ -101,7 +101,7 @@ func extractTextForEmbedding(payload []byte) (string, bool, bool) {
 	return string(payload), false, false
 }
 
-func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, semanticTolerance float64, virtualKey string, isolateCache bool, forceDisableL2 bool) (OptimizationResult, error) {
+func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, semanticTolerance float64, virtualKey string, isolateCache bool, forceDisableL2 bool, enableL1 bool, enableL2 bool, enableL3 bool, limitExceeded bool, cacheTtl int) (OptimizationResult, error) {
 	if isolateCache {
 		var payloadMap map[string]interface{}
 		if err := json.Unmarshal(payload, &payloadMap); err == nil {
@@ -113,7 +113,7 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 
 	embeddingText, hasImage, autoDisableL2 := extractTextForEmbedding(payload)
 
-	// Caller (proxy.go) can force L2 off — used when a Record Session
+	// Caller (proxy.go) can force L2 off â€” used when a Record Session
 	// is active or when the request body contains tool_calls (an
 	// agent SDK is in the middle of a tool loop).
 	disableL2 := autoDisableL2 || forceDisableL2
@@ -128,27 +128,37 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 	hashStr := hex.EncodeToString(hash[:])
 
 	// Cache key prefix scoped to user's virtual key
-	l1Key := "optitoken:l1cache:" + virtualKey + ":" + hashStr
-	l2Prefix := "optitoken:l2cache:" + virtualKey + ":"
+	l1Key := "synapse:l1cache:" + virtualKey + ":" + hashStr
+	l2Prefix := "synapse:l2cache:" + virtualKey + ":"
 
 	// 1. L1 Cache (Exact Match) — per user
-	cachedResp, err := rdb.Get(ctx, l1Key).Bytes()
-	if err == nil && len(cachedResp) > 0 {
-		return OptimizationResult{
-			Payload:         payload,
-			PayloadHash:     hashStr,
-			CacheHitLevel:   "L1",
-			PromptTokensOrig: origTokens,
-			PromptTokensOpt:  0,
-			HitResponse:     cachedResp,
-		}, nil
+	if enableL1 {
+		cachedResp, err := rdb.Get(ctx, l1Key).Bytes()
+		if err == nil && len(cachedResp) > 0 {
+			if ShouldReuseCache(ctx, rdb, payload, l1Key, cacheTtl, CacheReplayMaxAgeSecs) {
+				hitResponse := cachedResp
+				if limitExceeded {
+					hitResponse = nil // Do not return response to upstream, force proxy to hit provider
+				}
+				return OptimizationResult{
+					Payload:         payload,
+					PayloadHash:     hashStr,
+					CacheHitLevel:   "L1",
+					PromptTokensOrig: origTokens,
+					PromptTokensOpt:  0,
+					HitResponse:     hitResponse,
+				}, nil
+			} else {
+				log.Printf("[optiagent] L1 cache hit for stateful tool call is stale (age > %ds), treating as miss", CacheReplayMaxAgeSecs)
+			}
+		}
 	}
 
 	var payloadVector []float32
 
-	// 2. L2 Cache (Semantic Search via ONNX + Redis VSS) — filtered per user via TAG
+	// 2. L2 Cache (Semantic Search via ONNX + Redis VSS) â€” filtered per user via TAG
 	onnxUrl := os.Getenv("ONNX_API_URL")
-	if onnxUrl != "" && !hasImage && !disableL2 { // BYPASS L2 if payload contains an image or is a multi-turn conversation
+	if enableL2 && onnxUrl != "" && !hasImage && !disableL2 { // BYPASS L2 if payload contains an image or is a multi-turn conversation
 		reqBody, _ := json.Marshal(map[string]string{"text": embeddingText})
 		resp, err := http.Post(onnxUrl, "application/json", bytes.NewBuffer(reqBody))
 		if err == nil {
@@ -189,15 +199,24 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 
 							// If Cosine Distance < semanticTolerance (e.g. 0.15 = Similarity > 85%)
 							if score < semanticTolerance && hitResponse != "" {
-								return OptimizationResult{
-									Payload:          payload,
-									PayloadHash:      hashStr,
-									Vector:           payloadVector,
-									CacheHitLevel:    "L2",
-									PromptTokensOrig: origTokens,
-									PromptTokensOpt:  0,
-									HitResponse:      []byte(hitResponse),
-								}, nil
+								docKey, _ := resArr[1].(string)
+								if ShouldReuseCache(ctx, rdb, payload, docKey, cacheTtl, CacheReplayMaxAgeSecs) {
+									var hitBytes []byte
+									if !limitExceeded {
+										hitBytes = []byte(hitResponse)
+									}
+									return OptimizationResult{
+										Payload:          payload,
+										PayloadHash:      hashStr,
+										Vector:           payloadVector,
+										CacheHitLevel:    "L2",
+										PromptTokensOrig: origTokens,
+										PromptTokensOpt:  0,
+										HitResponse:      hitBytes,
+									}, nil
+								} else {
+									log.Printf("[optiagent] L2 cache hit for stateful tool call is stale (age > %ds), treating as miss", CacheReplayMaxAgeSecs)
+								}
 							}
 						}
 					}
@@ -206,7 +225,7 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 		}
 	}
 
-	// Ensure l2Prefix is used (suppress unused warning) — used by main.go for cache population
+	// Ensure l2Prefix is used (suppress unused warning) â€” used by main.go for cache population
 	_ = l2Prefix
 
 	// 3. L3 Cache (Compression / Payload Optimization)
@@ -223,8 +242,14 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 	// We use the cache-preserving variant by default; the
 	// legacy CompressPayload is still available behind
 	// `!useCachePreservingL3` for debugging and A/B tests.
-	compressedPayload, err := CompressPayloadCachePreserving(payload)
-	if err != nil || compressedPayload == nil {
+	var compressedPayload []byte
+	var err error
+	if enableL3 {
+		compressedPayload, err = CompressPayloadCachePreserving(payload)
+		if err != nil || compressedPayload == nil {
+			compressedPayload = payload
+		}
+	} else {
 		compressedPayload = payload
 	}
 	optTokens := countTokens(string(compressedPayload))
@@ -234,14 +259,17 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 
 	cacheHitLevel := "NONE"
 	// Only mark as L3 and use the compressed payload if it is actually
-	// smaller — both in bytes AND in tokens. The JSON re-encoding done
+	// smaller â€” both in bytes AND in tokens. The JSON re-encoding done
 	// by CompressPayload can grow the payload (re-indented maps, key
 	// reordering, escapes) which would otherwise hurt the upstream
 	// provider and cancel out any tool-output pruning benefit.
-	if len(compressedPayload) < len(payload) && optTokens < origTokens {
+	if enableL3 && len(compressedPayload) < len(payload) && optTokens < origTokens {
 		cacheHitLevel = "L3"
+		if limitExceeded {
+			compressedPayload = payload // Keep original payload if simulated
+		}
 	} else {
-		// Compression made it worse — keep the original payload and
+		// Compression made it worse â€” keep the original payload and
 		// reset token counts so the dashboard's "saved" column does
 		// not go negative.
 		compressedPayload = payload

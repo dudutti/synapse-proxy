@@ -1,4 +1,4 @@
-#!/bin/sh
+﻿#!/bin/sh
 # Send 5 sequential identical requests to the proxy with the
 # benchmark-mode virtual key. Each request simulates a Hermes
 # agent: a long system prompt, several user/assistant turns,
@@ -26,7 +26,7 @@ import sys
 print('You are Hermes, an expert software engineer. ' * 700)
 ")
 
-# Older user/assistant history (prefix — should be byte-identical)
+# Older user/assistant history (prefix â€” should be byte-identical)
 HISTORY='{"role":"user","content":"Refactor the auth middleware"},{"role":"assistant","content":"I will plan: 1) parse token 2) check redis 3) inject user into context"}'
 
 # Recent (tail)
@@ -56,7 +56,7 @@ echo ""
 # Send 5 identical requests
 for i in 1 2 3 4 5; do
   echo "--- Request $i ---"
-  docker exec optitoken-dashboard wget -qO- \
+  docker exec Synapse Proxy-dashboard wget -qO- \
     --post-data="$PAYLOAD" \
     --header="Content-Type: application/json" \
     --header="Authorization: Bearer ${VIRTUAL_KEY}" \

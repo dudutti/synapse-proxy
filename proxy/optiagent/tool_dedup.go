@@ -1,4 +1,4 @@
-package optiagent
+﻿package optiagent
 
 import (
 	"context"
@@ -167,7 +167,7 @@ func CheckToolDedup(ctx context.Context, rdb *redis.Client, virtualKey string, c
 	}
 
 	h := sha256.Sum256([]byte(path))
-	key := "optitoken:tools:" + virtualKey + ":" + hex.EncodeToString(h[:])
+	key := "synapse:tools:" + virtualKey + ":" + hex.EncodeToString(h[:])
 
 	existing, err := rdb.Get(ctx, key).Bytes()
 	if err == nil && len(existing) > 0 {
@@ -192,6 +192,6 @@ func StoreToolDedupBody(ctx context.Context, rdb *redis.Client, virtualKey, file
 		return
 	}
 	h := sha256.Sum256([]byte(filePath))
-	key := "optitoken:tools:" + virtualKey + ":" + hex.EncodeToString(h[:])
+	key := "synapse:tools:" + virtualKey + ":" + hex.EncodeToString(h[:])
 	_ = rdb.Set(ctx, key, body, ttl).Err()
 }

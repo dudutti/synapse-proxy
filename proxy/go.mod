@@ -1,4 +1,4 @@
-module optitoken
+module synapse-proxy
 
 go 1.21
 

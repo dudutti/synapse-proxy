@@ -1,4 +1,4 @@
-package utils
+﻿package utils
 
 import (
 	"crypto/sha1"
@@ -10,7 +10,7 @@ import (
 
 // AgentSignature is the result of trying to identify the agent that
 // emitted a request flowing through the proxy. The proxy has no a-priori
-// knowledge of "Hermes" or "OpenClaw" — we infer the origin from
+// knowledge of "Hermes" or "OpenClaw" â€” we infer the origin from
 // request headers and the request body.
 type AgentSignature struct {
 	ID         string  // stable id used for grouping, e.g. "hermes", "openclaw", "chat-direct"
@@ -43,7 +43,7 @@ func DetectAgent(in AgentDetectionInput) AgentSignature {
 		{1.0, "ua", uaMatches(`(?i)langchain`), sig("langchain", "🔗 LangChain")},
 		{1.0, "ua", uaMatches(`(?i)llamaindex`), sig("llamaindex", "🦙 LlamaIndex")},
 		{0.95, "ua", uaMatches(`(?i)autogen|crewai|swarm`), sig("multi-agent", "🐝 Multi-Agent Framework")},
-		{0.9, "ua", uaMatches(`(?i)curl/`), sig("curl", "📟 curl")},
+		{0.9, "ua", uaMatches(`(?i)curl/`), sig("curl", "📡 curl")},
 		{0.9, "ua", uaMatches(`(?i)python-requests|aiohttp|httpx`), sig("python-sdk", "🐍 Python SDK")},
 
 		// --- Origin / Referer (web apps) -------------------------------
@@ -64,8 +64,8 @@ func DetectAgent(in AgentDetectionInput) AgentSignature {
 		{0.9, "tools", toolNameMatches(`(?i)^(search_|browse_|shell_)`), sig("tool-using-agent", "🔧 Tool-Using Agent")},
 
 		// --- Custom internal headers -----------------------------------
-		{0.99, "ua", headerMatches("X-Optitoken-Client", `(?i)benchmark`), sig("benchmark", "🧪 Benchmark")},
-		{0.99, "ua", headerMatches("X-Optitoken-Client", `(?i)playground`), sig("playground", "🎮 Playground")},
+		{0.99, "ua", headerMatches("X-SynapseProxy-Client", `(?i)benchmark`), sig("benchmark", "🧪 Benchmark")},
+		{0.99, "ua", headerMatches("X-SynapseProxy-Client", `(?i)playground`), sig("playground", "🎮 Playground")},
 	}
 
 	for _, r := range rules {
@@ -77,7 +77,7 @@ func DetectAgent(in AgentDetectionInput) AgentSignature {
 	}
 	return AgentSignature{
 		ID:         "chat-direct",
-		Label:      "💬 Chat direct",
+		Label:      "ðŸ’¬ Chat direct",
 		Confidence: 0.1,
 		Source:     "fallback",
 	}
@@ -89,8 +89,8 @@ func DetectAgent(in AgentDetectionInput) AgentSignature {
 // Order of precedence:
 //  1. X-Session-Id / X-Conversation-Id / X-Thread-Id / X-Request-Id headers
 //  2. body.metadata.session_id / thread_id / conversation_id
-//  3. body.user (string) — a stable user id is a decent proxy
-//  4. body.system (Anthropic) — hashed so sessions without an explicit id
+//  3. body.user (string) â€” a stable user id is a decent proxy
+//  4. body.system (Anthropic) â€” hashed so sessions without an explicit id
 //     are still grouped by their system context
 func ExtractSessionID(headers http.Header, body map[string]any) string {
 	hdrs := []string{"X-Session-Id", "X-Conversation-Id", "X-Thread-Id", "X-Request-Id"}

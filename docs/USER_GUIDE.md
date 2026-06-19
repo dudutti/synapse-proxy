@@ -1,14 +1,14 @@
-# OptiToken User Guide
+# Synapse Proxy User Guide
 
-Welcome to OptiToken, your AI API cost-saving proxy.
+Welcome to Synapse Proxy, your AI API cost-saving proxy.
 
-This guide covers both the **Open-Source Local Proxy** (for self-hosting) and the **OptiToken SaaS Dashboard** (for Enterprise/Team management).
+This guide covers both the **Open-Source Local Proxy** (for self-hosting) and the **Synapse Proxy SaaS Dashboard** (for Enterprise/Team management).
 
 ---
 
 ## 🏗️ 1. Deploying the Open-Source Proxy Locally
 
-If you want to run OptiToken entirely on your own infrastructure, you can deploy the core proxy engine using Docker. The proxy will handle caching and compression locally.
+If you want to run Synapse Proxy entirely on your own infrastructure, you can deploy the core proxy engine using Docker. The proxy will handle caching and compression locally.
 
 ### Prerequisites
 - Docker & Docker Compose
@@ -17,8 +17,8 @@ If you want to run OptiToken entirely on your own infrastructure, you can deploy
 ### Deployment Steps
 1. **Clone the repository:**
    ```bash
-   git clone https://github.com/dudutti/Optitoken.git
-   cd Optitoken/proxy
+   git clone https://github.com/dudutti/Synapse Proxy.git
+   cd Synapse Proxy/proxy
    ```
 
 2. **Start the services:**
@@ -51,16 +51,16 @@ If you want to run OptiToken entirely on your own infrastructure, you can deploy
 
 ---
 
-## ☁️ 2. Using the OptiToken SaaS Dashboard
+## ☁️ 2. Using the Synapse Proxy SaaS Dashboard
 
-For teams that don't want to manage Docker containers or want advanced tracking (live telemetry, financial ROI calculation, and visual A/B testing), we offer the **OptiToken SaaS Dashboard**.
+For teams that don't want to manage Docker containers or want advanced tracking (live telemetry, financial ROI calculation, and visual A/B testing), we offer the **Synapse Proxy SaaS Dashboard**.
 
-*(Available at [OptiToken.io](https://optitoken.io))*
+*(Available at [Synapse Proxy.io](https://Synapse Proxy.io))*
 
 ### Step 1: Account & Key Management
 1. **Create an account:** Navigate to `/signup`.
-2. **Secure your Provider Keys:** Go to **Settings** (`/settings`). Under "Generate Virtual OptiToken Key", select your Provider (e.g., OpenAI, Minimax) and paste your real API Key (`sk-...`). 
-3. **Get your Virtual Key:** Click **Generate**. OptiToken securely encrypts your real key and gives you a safe Virtual Key (`sk-opti-...`).
+2. **Secure your Provider Keys:** Go to **Settings** (`/settings`). Under "Generate Virtual Synapse Proxy Key", select your Provider (e.g., OpenAI, Minimax) and paste your real API Key (`sk-...`). 
+3. **Get your Virtual Key:** Click **Generate**. Synapse Proxy securely encrypts your real key and gives you a safe Virtual Key (`sk-opti-...`).
 4. **Integration:** Use this Virtual Key in your code. Our edge proxy handles the routing!
 
 ### Step 2: The Playground & Telemetry
@@ -72,7 +72,7 @@ For teams that don't want to manage Docker containers or want advanced tracking 
 The Playground is no longer just "two chat panels". It's a full A/B analytics workbench:
 
 - **Per-bubble stats** — every assistant reply gets a colored cache-level badge (`L0` cyan, `L1` blue, `L2` emerald, `L3` purple, `LOOP` amber, `MISS` zinc) plus inline token counts (`in` / `out`), `latency (ms)`, and `$ saved` vs. the direct path.
-- **3-up A vs B comparison bar** above the chat panels — shows `cost saved %`, `latency delta`, and `token delta`. Emerald when OptiToken wins, amber when it loses, zinc on a tie.
+- **3-up A vs B comparison bar** above the chat panels — shows `cost saved %`, `latency delta`, and `token delta`. Emerald when Synapse Proxy wins, amber when it loses, zinc on a tie.
 - **SVG sparklines strip** — inline polyline charts for Opti latency, Direct latency, and cumulative `$ saved` over the last 50 messages. Zero JS chart library, pure inline `<svg>`.
 - **Artifact Renderer** — auto-detects ```` ```html ````, ```` ```python ````, ```` ```js ````, etc. in the assistant reply:
   - **HTML artifacts** render live in a sandboxed `<iframe sandbox>` (no `allow-same-origin` — the artifact can't read your cookies / DOM). Buttons: `Copy` (source), `Open` (new tab via Blob URL — works in all browsers, unlike `data:` URIs that Chrome silently ignores and Safari blocks), `Download` (`.html` file), `Source` (toggle between rendered preview and raw HTML).
@@ -90,4 +90,4 @@ In the SaaS Settings, you can dynamically adjust the **Tolerance (Sensitivity)**
 - **Default (0.15)**: The sweet spot for support bots and conversational AI.
 
 ### Step 4: The Benchmark Mode (LLM Judge)
-If you want to ensure the Semantic Cache isn't returning inaccurate responses, use the **Benchmark Tab**. OptiToken will run your query twice (once via Cache, once via Direct API) and an independent LLM Judge will score the cache's reliability!
+If you want to ensure the Semantic Cache isn't returning inaccurate responses, use the **Benchmark Tab**. Synapse Proxy will run your query twice (once via Cache, once via Direct API) and an independent LLM Judge will score the cache's reliability!

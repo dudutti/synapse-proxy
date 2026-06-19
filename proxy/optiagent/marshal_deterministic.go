@@ -1,4 +1,4 @@
-package optiagent
+﻿package optiagent
 
 // Deterministic JSON marshalling for L3-compressed payloads.
 //
@@ -9,7 +9,7 @@ package optiagent
 // SAME input payload can therefore produce different output bytes.
 //
 // Why this matters: provider prompt caching (Anthropic, OpenAI,
-// MiniMax) uses byte-exact prefix matching. If OptiToken's L3
+// MiniMax) uses byte-exact prefix matching. If Synapse Proxy's L3
 // compressor emits non-deterministic bytes for an otherwise identical
 // input, we silently invalidate the provider's cache on every
 // request. The agent pays full input price for the prefix instead of
@@ -19,7 +19,7 @@ package optiagent
 //   - emits keys in alphabetical order (matches stdlib map behavior
 //     but explicit so we don't depend on Go's map impl)
 //   - omits trailing whitespace (compact)
-//   - disables HTML escaping (so "é" stays as "é" not "\u00e9")
+//   - disables HTML escaping (so "Ã©" stays as "Ã©" not "\u00e9")
 //   - handles nested maps and slices the same way
 //
 // The encoder mirrors the subset of JSON that we generate from a
@@ -142,7 +142,7 @@ func writeDeterministic(buf *bytes.Buffer, v interface{}) error {
 		// the assistant messages it prunes. We also disable
 		// the default JSON Unicode escaping for printable ASCII
 		// (utf-8 passthrough) by using a json.Encoder instead of
-		// json.Marshal — the latter always escapes '<', '>', and
+		// json.Marshal â€” the latter always escapes '<', '>', and
 		// '&', which would defeat the CoT pruning.
 		//
 		// Note: this is a per-string operation; we still walk the

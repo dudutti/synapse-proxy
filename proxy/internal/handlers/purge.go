@@ -1,4 +1,4 @@
-package handlers
+﻿package handlers
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 	"log"
 	"net/http"
 
-	"optitoken/internal/db"
+	"synapse-proxy/internal/db"
 )
 
 // CachePurgeHandler handles HTTP requests to purge Redis L1 and L2 cache entries
@@ -26,11 +26,11 @@ func CachePurgeHandler(w http.ResponseWriter, r *http.Request) {
 	
 	var l1Pattern, l2Pattern string
 	if vk != "" {
-		l1Pattern = "optitoken:l1cache:" + vk + ":*"
-		l2Pattern = "optitoken:l2cache:" + vk + ":*"
+		l1Pattern = "synapse:l1cache:" + vk + ":*"
+		l2Pattern = "synapse:l2cache:" + vk + ":*"
 	} else {
-		l1Pattern = "optitoken:l1cache:*"
-		l2Pattern = "optitoken:l2cache:*"
+		l1Pattern = "synapse:l1cache:*"
+		l2Pattern = "synapse:l2cache:*"
 	}
 
 	// Purge L1 cache

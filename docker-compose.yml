@@ -1,13 +1,22 @@
 version: '3.8'
 
+# Local-dev compose file for the Synapse Proxy engine.
+#
+# Bring up Postgres + Redis + the ONNX embedder + the Go proxy, all on
+# the host network, no TLS, no dashboard. For production deployment see
+# docker-compose.prod.yml (private repo).
+#
+# All credentials below are local-dev placeholders. Override with
+# environment variables when starting the stack.
+
 services:
   postgres:
     image: postgres:15
-    container_name: optitoken-postgres
+    container_name: synapse-proxy-postgres
     environment:
-      POSTGRES_USER: optitoken
-      POSTGRES_PASSWORD: password123
-      POSTGRES_DB: optitoken_db
+      POSTGRES_USER: ${POSTGRES_USER:-synapse-proxy}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-please-change-me}
+      POSTGRES_DB: ${POSTGRES_DB:-synapse-proxy_db}
     ports:
       - "5432:5432"
     volumes:
@@ -16,7 +25,7 @@ services:
 
   redis:
     image: redis/redis-stack-server:latest
-    container_name: optitoken-redis
+    container_name: synapse-proxy-redis
     ports:
       - "6379:6379"
     volumes:
@@ -25,23 +34,25 @@ services:
 
   onnx-embedder:
     build: ./proxy/onnx-embedder
-    container_name: optitoken-onnx
+    container_name: synapse-proxy-onnx
     ports:
       - "8000:8000"
     restart: unless-stopped
 
   proxy:
     build: ./proxy
-    container_name: optitoken-proxy
+    container_name: synapse-proxy
     ports:
       - "8080:8080"
       - "1234:8080"
     environment:
       - REDIS_ADDR=redis:6379
-      - DATABASE_URL=postgresql://optitoken:password123@postgres:5432/optitoken_db?sslmode=disable
+      - DATABASE_URL=postgresql://${POSTGRES_USER:-synapse-proxy}:${POSTGRES_PASSWORD:-please-change-me}@postgres:5432/${POSTGRES_DB:-synapse-proxy_db}?sslmode=disable
       - ONNX_API_URL=http://onnx-embedder:8000/embed
-      - DEFAULT_VIRTUAL_KEY=sk-opti-fad650fdfa2ef0619a18a1a95ded6172
-      - FORCE_MODEL=MiniMax-M2.7
+      # A free-tier virtual key is auto-seeded on first boot and printed
+      # in the proxy logs. Override here to use a specific key in dev.
+      # DEFAULT_VIRTUAL_KEY=sk-opti-CHANGE-ME
+      # FORCE_MODEL=minimax-m2.7
     depends_on:
       - redis
       - onnx-embedder

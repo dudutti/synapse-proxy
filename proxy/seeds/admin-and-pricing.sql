@@ -1,4 +1,4 @@
--- Seed admin user + per-token-class pricing for all providers.
+﻿-- Seed admin user + per-token-class pricing for all providers.
 -- Idempotent: safe to re-run.
 -- Run after: docker compose up -d (Postgres first boot creates the schema via Prisma push).
 
@@ -22,7 +22,7 @@ VALUES (
   'admin-user-001',
   -- bcrypt cost-10 placeholder hash (does NOT match any password)
   '$2b$10$abcdefghijklmnopqrstuuQJQ4w8YUk0sIFKbkzKK.k3xkU.W1zGq',
-  'admin@optitoken.local',
+  'admin@Synapse Proxy.local',
   'Admin',
   'SUPERADMIN'::"Role",
   NOW()

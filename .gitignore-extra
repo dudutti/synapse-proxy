@@ -1,0 +1,6 @@
+﻿# Test scratch files - kept only on dev machines
+cmd/
+BENCHMARK_*
+AB_BENCHMARK_*
+L3_CACHE_PRESERVING_PLAN*
+social_posts_update*

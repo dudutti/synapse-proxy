@@ -1,11 +1,11 @@
-# OptiToken Test Suite
+﻿# Synapse Proxy Test Suite
 
 This directory contains reproducible tests and real benchmark
-data for the OptiToken proxy. Tests are organized by feature.
+data for the Synapse Proxy. Tests are organized by feature.
 
 ## Subdirectories
 
-- [`ab_benchmark_2026_06_18/`](ab_benchmark_2026_06_18/) — A/B
+- [`ab_benchmark_2026_06_18/`](ab_benchmark_2026_06_18/) â€” A/B
   benchmark validating Phase 2 of the cache-preserving L3
   architecture. Includes the raw `BenchmarkLog` rows, the
   proxy log entries showing the provider's cache hit count,
@@ -22,9 +22,9 @@ data for the OptiToken proxy. Tests are organized by feature.
    - **What** was tested
    - **Why** this test exists
    - **How** to reproduce it
-   - **What the data shows** — the actual numbers, with a
+   - **What the data shows** â€” the actual numbers, with a
      one-line interpretation
-   - **Limitations** — what this test does NOT cover
+   - **Limitations** â€” what this test does NOT cover
 5. Never commit credentials, virtual keys, real server URLs, or
    passwords. Use `${VIRTUAL_KEY}` and placeholder URLs.
 
@@ -43,6 +43,6 @@ data for the OptiToken proxy. Tests are organized by feature.
 
 ## See also
 
-- [`../README.md`](../README.md) — top-level project readme
-- [`../proxy/optiagent/compressor_test.go`](../proxy/optiagent/compressor_test.go) — unit tests for the L3 compressor
-- [`../proxy/optiagent/prefix_split_test.go`](../proxy/optiagent/prefix_split_test.go) — unit tests for the cache-preserving split
+- [`../README.md`](../README.md) â€” top-level project readme
+- [`../proxy/optiagent/compressor_test.go`](../proxy/optiagent/compressor_test.go) â€” unit tests for the L3 compressor
+- [`../proxy/optiagent/prefix_split_test.go`](../proxy/optiagent/prefix_split_test.go) â€” unit tests for the cache-preserving split

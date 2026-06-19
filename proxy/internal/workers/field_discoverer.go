@@ -1,4 +1,4 @@
-package workers
+﻿package workers
 
 import (
 	"context"
@@ -25,7 +25,7 @@ type UsageMapping struct {
 // usageMapKey is the Redis hash field where the mapping is stored.
 // We piggy-back on the same hash structure as radar entries so the
 // dashboard can read them in one pass.
-const usageMapKey = "optitoken:radar:usage_mappings"
+const usageMapKey = "synapse:radar:usage_mappings"
 
 // FieldDiscoverer is a stateless analyzer: feed it raw response bodies
 // (the same bytes CollectSample stored) and it returns the most likely
@@ -120,7 +120,7 @@ func (fd *FieldDiscoverer) DiscoverUsageFields(samples [][]byte) (UsageMapping, 
 
 	confidence := (promptConf + compConf) / 2
 	// Penalize mappings that share a parent path (probably the same field
-	// picked for both sides — a sign of bad discovery).
+	// picked for both sides â€” a sign of bad discovery).
 	if pathPrefixMatch(prompt, completion) {
 		confidence *= 0.5
 	}
@@ -218,7 +218,7 @@ func pickBest(hits map[string]*fieldHit, sampleCount int) (string, float64) {
 }
 
 // pathPrefixMatch returns true if two paths share the same parent
-// (e.g. "usage.prompt_tokens" and "usage.completion_tokens") — this is
+// (e.g. "usage.prompt_tokens" and "usage.completion_tokens") â€” this is
 // usually fine, but if they're the SAME field picked twice for both
 // sides, we want to penalize.
 func pathPrefixMatch(a, b string) bool {

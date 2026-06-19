@@ -1,4 +1,4 @@
-package optiagent
+﻿package optiagent
 
 import (
 	"context"
@@ -28,8 +28,8 @@ func HashPayload(payload []byte) string {
 //
 // Storage layout:
 //
-//	optitoken:l0:lock:<vk>:<sha256>   STRING, "in-flight:<uuid>", TTL 30s
-//	optitoken:l0:resp:<vk>:<sha256>   STRING, the JSON response bytes, TTL 30s
+//	Synapse Proxy:l0:lock:<vk>:<sha256>   STRING, "in-flight:<uuid>", TTL 30s
+//	Synapse Proxy:l0:resp:<vk>:<sha256>   STRING, the JSON response bytes, TTL 30s
 //
 // The proxy must call ReleaseL0 after the upstream call completes
 // (success OR failure) so the lock is freed even on errors.
@@ -44,7 +44,7 @@ const (
 // Returns (true, "") on success, (false, "") if another worker
 // already holds the lock.
 func L0Acquire(ctx context.Context, rdb *redis.Client, virtualKey, payloadHash string) (bool, string) {
-	lockKey := "optitoken:l0:lock:" + virtualKey + ":" + payloadHash
+	lockKey := "synapse:l0:lock:" + virtualKey + ":" + payloadHash
 	suffix := make([]byte, 8)
 	_, _ = rand.Read(suffix)
 	workerID := "in-flight:" + hex.EncodeToString(suffix)
@@ -61,7 +61,7 @@ func L0Acquire(ctx context.Context, rdb *redis.Client, virtualKey, payloadHash s
 // leader published one within the timeout, or an error on timeout.
 // Polls every L0PollMS.
 func L0Wait(ctx context.Context, rdb *redis.Client, virtualKey, payloadHash string) ([]byte, error) {
-	respKey := "optitoken:l0:resp:" + virtualKey + ":" + payloadHash
+	respKey := "synapse:l0:resp:" + virtualKey + ":" + payloadHash
 	deadline := time.Now().Add(time.Duration(L0LockTTLSec) * time.Second)
 	for {
 		resp, err := rdb.Get(ctx, respKey).Bytes()
@@ -83,8 +83,8 @@ func L0Wait(ctx context.Context, rdb *redis.Client, virtualKey, payloadHash stri
 // L0Release publishes the response and clears the lock. Safe to
 // call even if the caller never acquired (no-op).
 func L0Release(ctx context.Context, rdb *redis.Client, virtualKey, payloadHash, workerID string, response []byte) {
-	respKey := "optitoken:l0:resp:" + virtualKey + ":" + payloadHash
-	lockKey := "optitoken:l0:lock:" + virtualKey + ":" + payloadHash
+	respKey := "synapse:l0:resp:" + virtualKey + ":" + payloadHash
+	lockKey := "synapse:l0:lock:" + virtualKey + ":" + payloadHash
 
 	// Lua: only DEL the lock if the value matches our worker ID, so
 	// we don't accidentally release a lock taken by another worker

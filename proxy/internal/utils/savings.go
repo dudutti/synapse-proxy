@@ -1,6 +1,6 @@
 package utils
 
-import "optitoken/internal/db"
+import "synapse-proxy/internal/db"
 
 // SavingsBreakdown decomposes the cost saved per token class.
 // Total = InputFreshSaved + CacheReadSaved + CacheCreationSaved + OutputSaved.

@@ -1,5 +1,5 @@
 // Package optiagent provides request optimization utilities for the
-// OptiToken proxy: L1 exact cache, L2 semantic cache, L3 compression,
+// Synapse Proxy: L1 exact cache, L2 semantic cache, L3 compression,
 // loop detection, and tool-call deduplication.
 package optiagent
 
@@ -19,9 +19,10 @@ import (
 type LoopDetectResult struct {
 	IsLoop       bool   // true if we believe this is the 2nd, 3rd... call in a loop
 	LoopCount    int    // 1 = first call, 2 = second call, etc.
-	WindowSecs   int    // the rolling window the counter uses
-	ShouldReuse  bool   // true if the call should be served from the loop's cached response
-	ReusePayload []byte // the response to reuse (only set when ShouldReuse && IsLoop)
+	WindowSecs        int    // the rolling window the counter uses
+	ShouldReuse       bool   // true if the call should be served from the loop's cached response
+	ReusePayload      []byte // the response to reuse (only set when ShouldReuse && IsLoop)
+	TriggerKillSwitch bool   // true if the agent loop was blocked by the firewall kill switch
 }
 
 const (
@@ -45,15 +46,15 @@ const (
 //
 // Storage layout (per virtual key):
 //
-//	optitoken:loops:<vk>:<payloadHash>         (ZSET, members=call ids, scores=ts)
-//	optitoken:loops:<vk>:<payloadHash>:first   (STRING, the cached 1st-call response)
-func DetectLoop(ctx context.Context, rdb *redis.Client, virtualKey, payloadHash string) LoopDetectResult {
+//	Synapse Proxy:loops:<vk>:<payloadHash>         (ZSET, members=call ids, scores=ts)
+//	Synapse Proxy:loops:<vk>:<payloadHash>:first   (STRING, the cached 1st-call response)
+func DetectLoop(ctx context.Context, rdb *redis.Client, virtualKey, payloadHash string, killSwitch bool) LoopDetectResult {
 	now := time.Now()
 	nowNs := now.UnixNano()
 	cutoffNs := now.Add(-time.Duration(LOOP_WINDOW_SECS) * time.Second).UnixNano()
 
-	zKey := "optitoken:loops:" + virtualKey + ":" + payloadHash
-	firstKey := "optitoken:loops:" + virtualKey + ":" + payloadHash + ":first"
+	zKey := "synapse:loops:" + virtualKey + ":" + payloadHash
+	firstKey := "synapse:loops:" + virtualKey + ":" + payloadHash + ":first"
 
 	// 1. Evict entries older than the window.
 	if err := rdb.ZRemRangeByScore(ctx, zKey, "-inf", strconv.FormatInt(cutoffNs, 10)).Err(); err != nil {
@@ -84,6 +85,15 @@ func DetectLoop(ctx context.Context, rdb *redis.Client, virtualKey, payloadHash 
 	}
 
 	if loopCount >= LOOP_THRESHOLD {
+		if killSwitch {
+			return LoopDetectResult{
+				IsLoop:            true,
+				LoopCount:         loopCount,
+				WindowSecs:        LOOP_WINDOW_SECS,
+				TriggerKillSwitch: true,
+			}
+		}
+
 		cached, err := rdb.Get(ctx, firstKey).Bytes()
 		if err == nil && len(cached) > 0 {
 			_ = rdb.Expire(ctx, firstKey, time.Duration(LOOP_WINDOW_SECS+10)*time.Second).Err()
@@ -116,7 +126,7 @@ func StoreLoopFirstResponse(ctx context.Context, rdb *redis.Client, virtualKey, 
 	if len(response) == 0 {
 		return
 	}
-	firstKey := "optitoken:loops:" + virtualKey + ":" + payloadHash + ":first"
+	firstKey := "synapse:loops:" + virtualKey + ":" + payloadHash + ":first"
 	_ = rdb.Set(ctx, firstKey, response, time.Duration(LOOP_WINDOW_SECS+10)*time.Second).Err()
 }
 

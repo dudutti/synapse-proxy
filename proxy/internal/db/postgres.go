@@ -1,4 +1,4 @@
-package db
+﻿package db
 
 import (
 	"database/sql"
@@ -14,7 +14,7 @@ var dbClient *sql.DB
 func InitPostgres() {
 	dbUrl := os.Getenv("DATABASE_URL")
 	if dbUrl == "" {
-		dbUrl = "postgresql://user:password@localhost:5432/optitoken_db?sslmode=disable"
+		dbUrl = "postgresql://user:password@localhost:5432/synapse-proxy_db?sslmode=disable"
 		log.Println("WARNING: DATABASE_URL is not set. Using default local credentials. Do not use this in production!")
 	}
 

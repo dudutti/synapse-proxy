@@ -1,4 +1,4 @@
-package handlers
+﻿package handlers
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"time"
 
-	"optitoken/internal/db"
+	"synapse-proxy/internal/db"
 )
 
 // HealthzHandler returns 200 OK as long as the Go process is alive.
@@ -27,7 +27,7 @@ func HealthzHandler(w http.ResponseWriter, r *http.Request) {
 // ONNX embedder (used for L2 semantic search). Postgres is checked
 // indirectly via the pricing syncer state.
 //
-// Use this for k8s readinessProbe — Kubernetes will stop sending
+// Use this for k8s readinessProbe â€” Kubernetes will stop sending
 // traffic to the pod until this returns 200.
 //
 // Returns 503 on any dependency failure. Each dependency has its own
@@ -48,7 +48,7 @@ func ReadyzHandler(w http.ResponseWriter, r *http.Request) {
 		Checks:   map[string]string{},
 		CheckedAt: time.Now().UTC().Format(time.RFC3339Nano),
 		BuildInfo: map[string]string{
-			"service": "optitoken-proxy",
+			"service": "synapse-proxy",
 			"version": "1.5.0",
 		},
 	}
@@ -83,8 +83,8 @@ func pingRedis(ctx context.Context) error {
 }
 
 // errRedisNotInit is returned when GetRedis() was never wired up
-// (e.g. tests, partial boot). Not fatal — proxy falls back to
-// in-memory caches — but still counts as "degraded" because cache
+// (e.g. tests, partial boot). Not fatal â€” proxy falls back to
+// in-memory caches â€” but still counts as "degraded" because cache
 // hits will leak across instances.
 var errRedisNotInit = &redisNotInitErr{}
 

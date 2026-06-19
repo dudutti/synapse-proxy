@@ -1,8 +1,8 @@
-#!/bin/sh
+﻿#!/bin/sh
 # Compare 2 consecutive identical requests to see if the
 # originalPrompt bytes are byte-exact identical (the cache
 # preservation invariant).
-docker exec optitoken-postgres psql -U optitoken_admin -d optitoken_db -c "
+docker exec synapse-proxy-postgres psql -U synapse-proxy_admin -d synapse-proxy_db -c "
 SELECT
   id,
   \"createdAt\",

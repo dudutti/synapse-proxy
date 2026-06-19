@@ -1,4 +1,4 @@
-package services
+﻿package services
 
 import (
 	"crypto/aes"
@@ -38,7 +38,7 @@ func loadGCMKey() {
 		raw := os.Getenv("ENCRYPTION_KEY")
 		if raw == "" {
 			// Dev fallback. Loud warning so it's obvious in logs.
-			sum := sha256.Sum256([]byte("optitoken-dev-key-do-not-use-in-prod"))
+			sum := sha256.Sum256([]byte("Synapse Proxy-dev-key-do-not-use-in-prod"))
 			gcmKey = sum[:]
 			if !gcmWarned {
 				fmt.Println("[crypto] WARNING: ENCRYPTION_KEY not set, using dev fallback. Set it in production .env (32 bytes hex).")
@@ -103,11 +103,11 @@ func DecryptRealKey(payload string) (string, error) {
 		if err == nil {
 			return string(pt), nil
 		}
-		// GCM open failed (wrong key, tampered) — fall back to plaintext
+		// GCM open failed (wrong key, tampered) â€” fall back to plaintext
 		// for legacy keys seeded before encryption was enabled.
 		return payload, nil
 	}
-	// Not a valid hex payload → plaintext (legacy)
+	// Not a valid hex payload â†’ plaintext (legacy)
 	return payload, nil
 }
 

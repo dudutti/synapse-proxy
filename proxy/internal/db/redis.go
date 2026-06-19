@@ -1,4 +1,4 @@
-package db
+﻿package db
 
 import (
 	"context"
@@ -38,7 +38,7 @@ func InitRedisIndex() {
 	rdbClient.Do(ctx, "FT.DROPINDEX", "idx:l2cache").Err()
 	
 	// Create index with vk TAG for per-user filtering (384 dims for paraphrase-multilingual-MiniLM-L12-v2)
-	err := rdbClient.Do(ctx, "FT.CREATE", "idx:l2cache", "ON", "HASH", "PREFIX", "1", "optitoken:l2cache:", "SCHEMA", "vk", "TAG", "vector", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "384", "DISTANCE_METRIC", "COSINE", "response", "TEXT").Err()
+	err := rdbClient.Do(ctx, "FT.CREATE", "idx:l2cache", "ON", "HASH", "PREFIX", "1", "synapse:l2cache:", "SCHEMA", "vk", "TAG", "vector", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "384", "DISTANCE_METRIC", "COSINE", "response", "TEXT").Err()
 	
 	if err != nil && !strings.Contains(err.Error(), "Index already exists") {
 		log.Printf("Redis VSS Index creation issue (safe to ignore if not redis-stack): %v", err)

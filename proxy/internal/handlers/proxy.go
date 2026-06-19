@@ -16,12 +16,12 @@ import (
 	"strings"
 	"time"
 
-	"optitoken/internal/db"
-	"optitoken/internal/metrics"
-	"optitoken/internal/services"
-	"optitoken/internal/utils"
-	"optitoken/internal/workers"
-	"optitoken/optiagent"
+	"synapse-proxy/internal/db"
+	"synapse-proxy/internal/metrics"
+	"synapse-proxy/internal/services"
+	"synapse-proxy/internal/utils"
+	"synapse-proxy/internal/workers"
+	"synapse-proxy/optiagent"
 	"github.com/redis/go-redis/v9"
 )
 
@@ -65,11 +65,21 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	authHeader := "Bearer " + virtualKey
-	_, realKey, provider, fallbackKey, fallbackProvider, _, isBenchmark, semanticTolerance, cacheTtl, defaultModel, isolateCache, zeroLog, err := services.ValidateVirtualKey(ctx, authHeader)
+	keyConfig, err := services.ValidateVirtualKey(ctx, authHeader)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusUnauthorized)
 		return
 	}
+	realKey := keyConfig.RealKey
+	provider := keyConfig.Provider
+	fallbackKey := keyConfig.FallbackKey
+	fallbackProvider := keyConfig.FallbackProvider
+	isBenchmark := keyConfig.IsBenchmark
+	semanticTolerance := keyConfig.SemanticTolerance
+	cacheTtl := keyConfig.CacheTtl
+	defaultModel := keyConfig.DefaultModel
+	isolateCache := keyConfig.IsolateCache
+	zeroLog := keyConfig.ZeroLog
 
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
@@ -77,16 +87,12 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Zero-Log Mode: under this flag, the proxy never persists the
-	// prompt or response content anywhere (cache, DB, telemetry,
-	// Model Radar samples). We still forward the request to the
-	// upstream provider so the user gets their answer — we just
-	// don't keep the content on our side.
-	//
-	// We re-parse the body first so subsequent code (DetectAgent,
-	// ProcessRequest, cache, telemetry) sees the redacted bytes.
-	if zeroLog {
+	if zeroLog && keyConfig.RedactPII {
+		bodyBytes = utils.RedactBoth(bodyBytes)
+	} else if zeroLog {
 		bodyBytes = utils.RedactJSONBody(bodyBytes)
+	} else if keyConfig.RedactPII {
+		bodyBytes = utils.RedactPII(bodyBytes)
 	}
 
 	reqModel := "unknown"
@@ -103,14 +109,41 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Detect originating agent (Hermes, OpenClaw, ...) and session id
 	// from request headers + body. The proxy does not require any client
-	// cooperation — it infers everything heuristically.
+	// cooperation â€” it infers everything heuristically.
 	agentSig := utils.DetectAgent(utils.AgentDetectionInput{
 		Headers:    r.Header,
 		Body:       bodyBytes,
 		BodyParsed: payloadMap,
 	})
 	sessionID := utils.ExtractSessionID(r.Header, payloadMap)
-	log.Printf("[ProxyHandler] agent=%s (%s, conf=%.2f) session=%q", agentSig.ID, agentSig.Source, agentSig.Confidence, sessionID)
+
+	// Multiturn detection: even without an explicit sessionId, we
+	// can group requests that share the same conversation signature
+	// (system prompt + tool set) into a "natural session". This is
+	// what lets the dashboard show "Tour N" and group multi-turn
+	// conversations automatically.
+	//
+	// The turn count is what makes this useful: a single one-shot
+	// request has TurnCount=0 and no signature is generated (it
+	// would just be noise). A request with assistant messages in
+	// its history has TurnCount>=1 and we mint a session id from
+	// the conv signature. Subsequent requests with the same
+	// signature reuse the same id, so the dashboard sees them as
+	// one conversation.
+	multiturn := utils.MultiturnSign(payloadMap)
+	turnCount := multiturn.TurnCount
+	convSignature := multiturn.ConvSignature
+
+	// Only auto-session when the user is in the middle of a
+	// conversation (turnCount >= 1). A first-turn request without
+	// an explicit sessionId stays anonymous — there's no prior
+	// context to anchor it to.
+	if sessionID == "" && turnCount >= 1 && convSignature != "" {
+		sessionID = convSignature
+	}
+
+	log.Printf("[ProxyHandler] agent=%s (%s, conf=%.2f) session=%q turn=%d sig=%s",
+		agentSig.ID, agentSig.Source, agentSig.Confidence, sessionID, turnCount, convSignature)
 
 	isBypassStr := r.Header.Get("X-Bypass-Cache")
 	isBypass := isBypassStr == "true"
@@ -120,17 +153,17 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	rdb := db.GetRedis()
 
 	// Per-request "Record session" override. The dashboard's Record
-	// button or an agent SDK can set X-Optitoken-Session to a stable
+	// button or an agent SDK can set X-SynapseProxy-Session to a stable
 	// session identifier; the proxy tags all subsequent RequestLog rows
 	// with this id so the dashboard can group them into a single
 	// "session" view. This is a no-op if the header is absent.
-	if sessID := r.Header.Get("X-Optitoken-Session"); sessID != "" {
+	if sessID := r.Header.Get("X-SynapseProxy-Session"); sessID != "" {
 		sessionID = sessID
 	}
 
 	// Server-side session recording: the dashboard's Record Session
 	// button writes a per-virtual-key tag to Redis (key
-	// `optitoken:session:vk:<vk>`) when the user clicks Start, and
+	// `synapse:session:vk:<vk>`) when the user clicks Start, and
 	// removes it on Stop. We check Redis on every request and, if a
 	// tag is present, override the sessionID with it. This lets the
 	// user record a session transparently: any agent (Hermes, curl,
@@ -142,7 +175,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		sessionID = dbTag
 	}
 
-	// Feature 3: Compaction hint — inject a system note so the agent
+	// Feature 3: Compaction hint â€” inject a system note so the agent
 	// knows that previous tool outputs may have been summarized. Only
 	// on the first turn of a session (or whenever the body has not
 	// already been mutated by us).
@@ -166,7 +199,109 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// The hit is logged for telemetry; full body-rewriting is left to
 	// future work since it requires tool-output mapping in the messages
 	// array.
-	toolCalls := optiagent.ExtractToolCalls(bodyBytes)
+toolCalls := optiagent.ExtractToolCalls(bodyBytes)
+	toolCallsStr := ""
+	if len(toolCalls) > 0 {
+		tcJSON, _ := json.Marshal(toolCalls)
+		toolCallsStr = string(tcJSON)
+
+		// Auto-discover: log every tool the agent has called at
+		// least once into the Redis set
+		// `synapse:discovered_tools:<vk>`. The dashboard reads
+		// this set and renders it as a checkable list under the
+		// Agent Firewall. Tools the operator has NOT explicitly
+		// denied are allowed; tools they UNCHECK are added to a
+		// denylist (`synapse:denied_tools:<vk>`) consulted below.
+		//
+		// We SADD once per tool name (the set is dedup'd) and set
+		// a generous 30-day TTL so the list survives across
+		// deploys but eventually forgets abandoned agents.
+		if rdb != nil && virtualKey != "" {
+			discoverKey := "synapse:discovered_tools:" + virtualKey
+			for _, tc := range toolCalls {
+				if tc.ToolName == "" {
+					continue
+				}
+				rdb.SAdd(ctx, discoverKey, tc.ToolName)
+			}
+			rdb.Expire(ctx, discoverKey, 30*24*time.Hour)
+		}
+	}
+
+	// Denylist consult: if the operator unchecked a tool in the
+	// dashboard, we block it before the filter above. The denylist
+	// is a Redis set written by the dashboard's PUT endpoint. We
+	// also keep the original AllowList behaviour for backwards
+	// compatibility — if `AllowedTools` is set, we still apply the
+	// strict whitelist (the user opted into strict mode).
+	if rdb != nil && virtualKey != "" && len(toolCalls) > 0 && !keyConfig.BlockUnknownTools {
+		denyKey := "synapse:denied_tools:" + virtualKey
+		denied, _ := rdb.SMembers(ctx, denyKey).Result()
+		if len(denied) > 0 {
+			denyMap := make(map[string]bool, len(denied))
+			for _, d := range denied {
+				denyMap[d] = true
+			}
+			for _, tc := range toolCalls {
+				if denyMap[tc.ToolName] {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusForbidden)
+					w.Write([]byte(`{"error": {"message": "Agent Firewall denied tool call: ` + tc.ToolName + `"}}`))
+					return
+				}
+			}
+		}
+	}
+
+// Agent Firewall - Tool Filtering
+	if keyConfig.BlockUnknownTools && keyConfig.AllowedTools != "" && len(toolCalls) > 0 {
+		allowed := strings.Split(keyConfig.AllowedTools, ",")
+		allowedMap := make(map[string]bool)
+		for _, a := range allowed {
+			allowedMap[strings.TrimSpace(a)] = true
+		}
+		for _, tc := range toolCalls {
+			if !allowedMap[tc.ToolName] {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusBadRequest)
+				w.Write([]byte(`{"error": {"message": "Agent Firewall blocked unauthorized tool call: ` + tc.ToolName + `"}}`))
+				return
+			}
+		}
+	}
+
+	// Agent Firewall - Tool-call fingerprint (observer only).
+	// See docs/agent_firewall.md for the strategy.
+	if keyConfig.FingerprintLoopDetect {
+		fp := optiagent.CheckToolFingerprint(ctx, rdb, virtualKey, bodyBytes)
+		if fp.IsLoop {
+			log.Printf("[ProxyHandler] FINGERPRINT OBSERVED: tool=%s count=%d (vk=%s) — deferring decision to cache check",
+				fp.ToolName, fp.LoopCount, virtualKey)
+			w.Header().Set("X-Synapse-Fingerprint-Count", strconv.Itoa(fp.LoopCount))
+			w.Header().Set("X-Synapse-Fingerprint-Tool", fp.ToolName)
+
+			go workers.PushTelemetry(virtualKey, provider, reqModel,
+				optResult.PromptTokensOrig, 0, optResult.PromptTokensOpt, 0, 0,
+				"NONE", time.Since(startTime), string(bodyBytes), string(optResult.Payload), `{"event":"fingerprint_observed","tool":"`+fp.ToolName+`","count":`+strconv.Itoa(fp.LoopCount)+`}`,
+				0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog,
+				toolCallsStr, keyConfig.LimitExceeded, false,
+				turnCount, convSignature)
+		}
+	}
+
+	// Agent Firewall - Session Circuit Breaker
+	if keyConfig.SessionTokenLimit > 0 && sessionID != "" {
+		approxTokens := utils.CountTokens(string(bodyBytes))
+		usageKey := "synapse:session_usage:" + sessionID
+		currentSessionUsage, _ := rdb.IncrBy(ctx, usageKey, int64(approxTokens)).Result()
+		rdb.Expire(ctx, usageKey, 24*time.Hour)
+		if int(currentSessionUsage) > keyConfig.SessionTokenLimit {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error": {"message": "Agent Firewall: Session token limit exceeded (` + strconv.Itoa(keyConfig.SessionTokenLimit) + ` tokens)."}}`))
+			return
+		}
+	}
 	if len(toolCalls) > 0 {
 		toolDedupTTL := 5 * time.Minute
 		toolDedup := optiagent.CheckToolDedup(ctx, rdb, virtualKey, toolCalls, bodyBytes, toolDedupTTL)
@@ -182,9 +317,9 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	// Force-disable L2 (semantic) cache for agentic trajectories.
 	// Two triggers:
-	//   1. A Record Session is active (X-Optitoken-Session header
+			// 1. A Record Session is active (X-SynapseProxy-Session header
 	//      present, set by the dashboard "Start Recording" button)
-	//   2. The request body contains tool_calls — the client is an
+	//   2. The request body contains tool_calls â€” the client is an
 	//      agent SDK mid tool loop
 	// Both cases mean we're inside a long multi-turn context where
 	// L2's cosine-distance matching would happily return a response
@@ -208,17 +343,18 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 			log.Printf("[L0] Another worker is processing this payload, waiting for in-flight result (vk=%s hash=%s)", virtualKey, l0Hash[:12])
 			resp, waitErr := optiagent.L0Wait(ctx, rdb, virtualKey, l0Hash)
 			if waitErr == nil && len(resp) > 0 {
-				log.Printf("[L0] Got coalesced response from leader (%d bytes) — short-circuiting", len(resp))
+				log.Printf("[L0] Got coalesced response from leader (%d bytes) â€” short-circuiting", len(resp))
 				// Telemetry for the L0 follower: same payload hash, but
 				// cacheLevel=L0 so it's counted separately from L1/L2/L3.
 				// TokensOrig=TokensOpt=0 because the follower did no work.
-				go workers.PushTelemetry(virtualKey, provider, reqModel, 0, 0, 0, 0, 0, "L0", time.Since(startTime), string(bodyBytes), string(bodyBytes), string(resp), 0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog)
+go workers.PushTelemetry(virtualKey, provider, reqModel, 0, 0, 0, 0, 0,
+			"L0", time.Since(startTime), string(bodyBytes), string(bodyBytes), string(resp), 0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog, toolCallsStr, keyConfig.LimitExceeded, false, turnCount, convSignature)
 				w.Header().Set("Content-Type", "application/json")
-				w.Header().Set("X-OptiToken-Cache", "L0-coalesced")
+				w.Header().Set("X-SynapseProxy-Cache", "L0-coalesced")
 				w.Write(resp)
 				return
 			}
-			log.Printf("[L0] Wait failed (%v) — falling through to normal pipeline", waitErr)
+			log.Printf("[L0] Wait failed (%v) â€” falling through to normal pipeline", waitErr)
 			// don't return; proceed as normal leader (someone else bailed)
 		} else {
 			l0WorkerID = workerID
@@ -234,7 +370,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if !isBypass {
-		optResult, err = optiagent.ProcessRequest(ctx, rdb, bodyBytes, semanticTolerance, virtualKey, isolateCache, forceDisableL2)
+		optResult, err = optiagent.ProcessRequest(ctx, rdb, bodyBytes, semanticTolerance, virtualKey, isolateCache, forceDisableL2, keyConfig.EnableL1, keyConfig.EnableL2, keyConfig.EnableL3, keyConfig.LimitExceeded, cacheTtl)
 		if err != nil {
 			http.Error(w, "Optimization engine failure", http.StatusInternalServerError)
 			return
@@ -249,8 +385,8 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 				log.Printf("[ProxyHandler] Cached %s response looks like an error, invalidating and falling through (model=%s)", optResult.CacheHitLevel, reqModel)
 				// Invalidate BOTH the L1 and L2 cache entries for this
 				// (vk, payload) so the next request actually re-hits upstream.
-				l1Key := "optitoken:l1cache:" + virtualKey + ":" + optResult.PayloadHash
-				l2Key := "optitoken:l2cache:" + virtualKey + ":" + optResult.PayloadHash
+				l1Key := "synapse:l1cache:" + virtualKey + ":" + optResult.PayloadHash
+				l2Key := "synapse:l2cache:" + virtualKey + ":" + optResult.PayloadHash
 				_ = rdb.Del(ctx, l1Key, l2Key).Err()
 				optResult.CacheHitLevel = "NONE"
 				// continue to upstream execution below
@@ -260,6 +396,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 				// it requested, even if the cached payload was originally
 				// produced under a different name (model aliasing).
 				restamped := utils.RestampModel(optResult.HitResponse, reqModel)
+				w.Header().Set("X-SynapseProxy-Cache", optResult.CacheHitLevel)
 				if wantStream {
 					streamCachedResponse(w, restamped, reqModel)
 				} else {
@@ -267,7 +404,12 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 					w.Write(restamped)
 				}
 
-				go workers.PushTelemetry(virtualKey, provider, reqModel, optResult.PromptTokensOrig, cachedUsage.CompletionTokens, optResult.PromptTokensOpt, 0, cachedUsage.ReasoningTokens, optResult.CacheHitLevel, time.Since(startTime), string(bodyBytes), string(optResult.Payload), string(restamped), cachedUsage.CacheCreationTokens, cachedUsage.CacheReadTokens, cachedUsage.CacheHitTokens, cachedUsage.CacheMissTokens, agentSig.ID, agentSig.Label, sessionID, zeroLog)
+go workers.PushTelemetry(virtualKey, provider, reqModel,
+				optResult.PromptTokensOrig, cachedUsage.CompletionTokens, optResult.PromptTokensOpt, 0, cachedUsage.ReasoningTokens,
+				optResult.CacheHitLevel, time.Since(startTime), string(bodyBytes), string(optResult.Payload), string(restamped),
+				cachedUsage.CacheCreationTokens, cachedUsage.CacheReadTokens, cachedUsage.CacheHitTokens, cachedUsage.CacheMissTokens,
+				agentSig.ID, agentSig.Label, sessionID, zeroLog, toolCallsStr, keyConfig.LimitExceeded, false,
+				turnCount, convSignature)
 
 				if isBenchmark {
 					go runBenchmarkEvaluation(virtualKey, realKey, provider, reqModel, defaultModel, bodyBytes, optResult.Payload, optResult.HitResponse, time.Since(startTime), 0, 0)
@@ -288,7 +430,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// window, the 3rd+ is served from the loop's cached response
 	// (the FIRST call's response). Catches runaway agents that retry
 	// the same tool call in a tight loop.
-	loopResult := optiagent.DetectLoop(ctx, rdb, virtualKey, optResult.PayloadHash)
+	loopResult := optiagent.DetectLoop(ctx, rdb, virtualKey, optResult.PayloadHash, keyConfig.KillSwitch)
 	if loopResult.IsLoop {
 		hashPrefix := optResult.PayloadHash
 		if len(hashPrefix) > 12 {
@@ -297,9 +439,25 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[ProxyHandler] Loop detected: count=%d/%d in %ds (hash=%s) model=%s",
 			loopResult.LoopCount, optiagent.LOOP_THRESHOLD, loopResult.WindowSecs,
 			hashPrefix, reqModel)
+
+		if loopResult.TriggerKillSwitch {
+			log.Printf("[ProxyHandler] KILL SWITCH FIRED for session %s", sessionID)
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			w.Write([]byte(`{"error": {"message": "Loop detected. Agent drift stopped by Synapse Proxy kill switch."}}`))
+
+// Telemetry: log the kill switch hit
+			go workers.PushTelemetry(virtualKey, provider, reqModel,
+				optResult.PromptTokensOrig, 0, optResult.PromptTokensOpt, 0, 0,
+				"NONE", time.Since(startTime), string(bodyBytes), string(optResult.Payload), `{"error":"kill_switch"}`,
+				0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog,
+				toolCallsStr, keyConfig.LimitExceeded, true,
+				turnCount, convSignature)
+			return
+		}
 	}
-	if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
-		log.Printf("[ProxyHandler] LOOP HIT (count=%d) — serving cached response instead of upstream", loopResult.LoopCount)
+if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
+		log.Printf("[ProxyHandler] LOOP HIT (count=%d) â€” serving cached response instead of upstream", loopResult.LoopCount)
 
 		restamped := utils.RestampModel(loopResult.ReusePayload, reqModel)
 		if wantStream {
@@ -309,16 +467,39 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 			w.Write(restamped)
 		}
 
-		// Telemetry: log the loop hit as a cache hit (LOOP level)
+// Telemetry: log the loop hit as a cache hit (LOOP level)
 		go workers.PushTelemetry(virtualKey, provider, reqModel,
 			optResult.PromptTokensOrig, 0, 0, 0, 0, "LOOP",
 			time.Since(startTime), string(bodyBytes), string(optResult.Payload),
 			string(restamped),
 			0, 0, 0, 0,
-			agentSig.ID, agentSig.Label, sessionID, zeroLog)
+			agentSig.ID, agentSig.Label, sessionID, zeroLog,
+			toolCallsStr, keyConfig.LimitExceeded, false,
+			turnCount, convSignature)
 		return
 	}
 
+	// Soft-loop 429: cache missed AND fingerprint observed. See
+	// docs/agent_firewall.md for the strategy.
+	if fpCount := w.Header().Get("X-Synapse-Fingerprint-Count"); fpCount != "" && !keyConfig.KillSwitch {
+		count, _ := strconv.Atoi(fpCount)
+		if count >= optiagent.FingerprintThreshold {
+			fpTool := w.Header().Get("X-Synapse-Fingerprint-Tool")
+			log.Printf("[ProxyHandler] SOFT LOOP BLOCK: tool=%s count=%d (vk=%s) — cache miss, returning 429",
+				fpTool, count, virtualKey)
+			w.Header().Set("Retry-After", strconv.Itoa(optiagent.FingerprintRetryAfterSecs))
+			w.WriteHeader(http.StatusTooManyRequests)
+			w.Write([]byte(`{"error": {"message": "Soft loop detected and no cached answer available. The proxy stopped the request to protect upstream quota. Wait 60s or disable Soft Loop Detect in the Agent Firewall.","tool":"` + fpTool + `","count":` + fpCount + `,"retry_after_seconds":` + strconv.Itoa(optiagent.FingerprintRetryAfterSecs) + `}}`))
+
+			go workers.PushTelemetry(virtualKey, provider, reqModel,
+				optResult.PromptTokensOrig, 0, optResult.PromptTokensOpt, 0, 0,
+				"NONE", time.Since(startTime), string(bodyBytes), string(optResult.Payload), `{"error":"fingerprint_loop","tool":"`+fpTool+`","count":`+fpCount+`}`,
+				0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog,
+				toolCallsStr, keyConfig.LimitExceeded, false,
+				turnCount, convSignature)
+			return
+		}
+	}
 
 	executeRequest := func(currentProvider, currentRealKey string) (*http.Response, error) {
 		var targetURL string
@@ -384,12 +565,12 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 				pMap["model"] = defaultModel
 				modified = true
 			case clientSentModel && !modelKnown && defaultModel != "":
-				// Unknown model on this provider — fall through to the
+				// Unknown model on this provider â€” fall through to the
 				// provider's default for the upstream call. The response
 				// will be re-stamped with clientModel by streamResponse
 				// (or cached-response path) so the client sees the name
 				// it expected.
-				log.Printf("[ProxyHandler] Model %q not advertised by provider %q — routing to default %q and re-stamping response", clientModel, currentProvider, defaultModel)
+				log.Printf("[ProxyHandler] Model %q not advertised by provider %q â€” routing to default %q and re-stamping response", clientModel, currentProvider, defaultModel)
 				pMap["model"] = defaultModel
 				modified = true
 			}
@@ -418,7 +599,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		upstreamStart := time.Now()
 		resp, doErr := client.Do(req)
 		// Record latency bucket for the Prometheus /metrics endpoint.
-		// isError is true when the call returned a non-2xx status — useful
+		// isError is true when the call returned a non-2xx status â€” useful
 		// to compute a real error rate, not just an outlier rate.
 		if resp != nil {
 			metrics.RecordUpstream(int(time.Since(upstreamStart).Milliseconds()), resp.StatusCode >= 400)
@@ -468,10 +649,10 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
-	streamResponse(w, resp, virtualKey, realKey, usedProvider, reqModel, defaultModel, optResult.PayloadHash, reqModel, optResult.Vector, optResult.PromptTokensOrig, optResult.PromptTokensOpt, optResult.CacheHitLevel, isBenchmark, bodyBytes, optResult.Payload, startTime, wantStream, cacheTtl, isNewModel, agentSig.ID, agentSig.Label, sessionID, zeroLog, &l0PublishResponse)
+	streamResponse(w, resp, virtualKey, realKey, usedProvider, reqModel, defaultModel, optResult.PayloadHash, reqModel, optResult.Vector, optResult.PromptTokensOrig, optResult.PromptTokensOpt, optResult.CacheHitLevel, isBenchmark, bodyBytes, optResult.Payload, startTime, wantStream, cacheTtl, isNewModel, agentSig.ID, agentSig.Label, sessionID, zeroLog, &l0PublishResponse, toolCallsStr, keyConfig.LimitExceeded, turnCount, convSignature)
 }
 
-func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, provider, model, defaultModel, payloadHash, clientModel string, vector []float32, promptOrig, promptOpt int, cacheLvl string, isBenchmark bool, rawPayload, optPayload []byte, startTime time.Time, wantStream bool, cacheTtl int, isNewModel bool, agentID, agentLabel, sessionID string, zeroLog bool, l0Capture *[]byte) {
+func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, provider, model, defaultModel, payloadHash, clientModel string, vector []float32, promptOrig, promptOpt int, cacheLvl string, isBenchmark bool, rawPayload, optPayload []byte, startTime time.Time, wantStream bool, cacheTtl int, isNewModel bool, agentID, agentLabel, sessionID string, zeroLog bool, l0Capture *[]byte, toolCallsStr string, limitExceeded bool, turnCount int, convSignature string) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
@@ -492,17 +673,17 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 	// Per-request observability headers so the dashboard / Playground can
 	// display stats without re-parsing the response body. Safe to expose:
 	// they only contain aggregate token counts, cache level, and cost
-	// deltas — never the prompt content.
+	// deltas â€” never the prompt content.
 	if cacheLvl != "" {
-		w.Header().Set("X-OptiToken-Cache", cacheLvl)
+		w.Header().Set("X-SynapseProxy-Cache", cacheLvl)
+		w.Header().Set("X-SynapseProxy-Tokens-In", strconv.Itoa(promptOrig))
+		w.Header().Set("X-SynapseProxy-Tokens-Out", strconv.Itoa(promptOpt))
 	}
-	w.Header().Set("X-OptiToken-Tokens-In", strconv.Itoa(promptOrig))
-	w.Header().Set("X-OptiToken-Tokens-Out", strconv.Itoa(promptOpt))
 	// Quick cost estimate using the same single-class helper as the
 	// legacy dashboard headline. The full 4-class breakdown is computed
 	// post-stream by the telemetry worker.
 	if promptOrig > promptOpt {
-		w.Header().Set("X-OptiToken-Cost-Saved", fmt.Sprintf("%.6f", utils.CalculateSavings(provider, model, promptOrig-promptOpt, 0)))
+		w.Header().Set("X-SynapseProxy-Cost-Saved", fmt.Sprintf("%.6f", utils.CalculateSavings(provider, model, promptOrig-promptOpt, 0)))
 	}
 
 	// Model re-stamping: if the client asked for a model that we aliased
@@ -617,7 +798,7 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 	if payloadHash != "" && isValidResponse {
 		ctx := context.Background()
 		rdb := db.GetRedis()
-		l1Key := "optitoken:l1cache:" + vk + ":" + payloadHash
+		l1Key := "synapse:l1cache:" + vk + ":" + payloadHash
 		ttl := time.Duration(cacheTtl) * time.Second
 
 		// Zero-Log Mode: we still token-count and measure latency
@@ -649,7 +830,7 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 			if len(vector) > 0 {
 				buf := new(bytes.Buffer)
 				if binary.Write(buf, binary.LittleEndian, vector) == nil {
-					l2Key := "optitoken:l2cache:" + vk + ":" + payloadHash
+					l2Key := "synapse:l2cache:" + vk + ":" + payloadHash
 					rdb.HSet(ctx, l2Key, "vk", vk, "vector", buf.Bytes(), "response", cacheableResponse)
 					rdb.Expire(ctx, l2Key, ttl)
 				}
@@ -706,7 +887,7 @@ func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, pro
 	completionOrig := completionTokens
 	completionOpt := completionTokens
 
-	go workers.PushTelemetry(vk, provider, realModel, promptOrig, completionOrig, promptOpt, completionOpt, reasoningTokens, cacheLvl, time.Since(startTime), string(rawPayload), string(optPayload), string(cacheableResponse), usage.CacheCreationTokens, usage.CacheReadTokens, usage.CacheHitTokens, usage.CacheMissTokens, agentID, agentLabel, sessionID, zeroLog)
+	go workers.PushTelemetry(vk, provider, realModel, promptOrig, completionOrig, promptOpt, completionOpt, reasoningTokens, cacheLvl, time.Since(startTime), string(rawPayload), string(optPayload), string(cacheableResponse), usage.CacheCreationTokens, usage.CacheReadTokens, usage.CacheHitTokens, usage.CacheMissTokens, agentID, agentLabel, sessionID, zeroLog, toolCallsStr, limitExceeded, false, turnCount, convSignature)
 
 	if isBenchmark {
 		go runBenchmarkEvaluation(vk, realKey, provider, realModel, defaultModel, rawPayload, optPayload, cacheableResponse, time.Since(startTime), promptOpt, completionOpt)
@@ -1067,7 +1248,7 @@ Response B:
 
 	rdb := db.GetRedis()
 	rdb.XAdd(context.Background(), &redis.XAddArgs{
-		Stream: "optitoken:benchmark_logs",
+		Stream: "synapse:benchmark_logs",
 		Values: map[string]interface{}{
 			"vk": vk,
 			"orig_prompt": string(rawPayload),
@@ -1186,8 +1367,8 @@ func isQuotaError(code int, msg string) bool {
 }
 
 // maskVirtualKey returns a short, non-secret prefix of the virtual key
-// for safe inclusion in panic / error logs. Format: first 8 chars + "…"
-// (e.g. "sk-opti…"). Returns "<empty>" for empty input.
+// for safe inclusion in panic / error logs. Format: first 8 chars + "â€¦"
+// (e.g. "sk-optiâ€¦"). Returns "<empty>" for empty input.
 func maskVirtualKey(authHeader string) string {
 	vk := strings.TrimPrefix(authHeader, "Bearer ")
 	vk = strings.TrimSpace(vk)
@@ -1195,7 +1376,7 @@ func maskVirtualKey(authHeader string) string {
 		return "<empty>"
 	}
 	if len(vk) <= 8 {
-		return vk[:min(len(vk), 4)] + "…"
+		return vk[:min(len(vk), 4)] + "â€¦"
 	}
-	return vk[:8] + "…"
+	return vk[:8] + "â€¦"
 }

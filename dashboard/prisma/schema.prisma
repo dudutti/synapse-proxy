@@ -74,6 +74,7 @@ model ApiKey {
   enableL2           Boolean        @default(true)
   enableL3           Boolean        @default(true)
   killSwitch         Boolean        @default(false)
+  fingerprintLoopDetect Boolean     @default(false) // Soft loop detect: 429 + Retry-After when same (tool,args) repeats 5x in 30s. Off by default — agents with todo-like tools (todo, plan, think) legitimately retry.
   sessionTokenLimit  Int?
   allowedTools       String?        @db.Text
   blockUnknownTools  Boolean        @default(false)

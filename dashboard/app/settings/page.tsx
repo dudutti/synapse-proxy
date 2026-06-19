@@ -53,6 +53,8 @@ interface ApiKey {
 
   killSwitch?: boolean;
 
+  fingerprintLoopDetect?: boolean;
+
   sessionTokenLimit?: number | null;
 
   allowedTools?: string | null;
@@ -545,6 +547,7 @@ export default function SettingsPage() {
     enableL2: boolean;
     enableL3: boolean;
     killSwitch: boolean;
+    fingerprintLoopDetect: boolean;
     sessionTokenLimit: number | null;
     allowedTools: string;
     blockUnknownTools: boolean;

@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect } from "react";
 import { motion } from "framer-motion";
-import { Shield, X, AlertTriangle, ListChecks, EyeOff, Database } from "lucide-react";
+import { Shield, X, AlertTriangle, ListChecks, EyeOff, Database, Wrench, RefreshCw } from "lucide-react";
 
 // FirewallModal — Agent Firewall configuration for one virtual key.
 //
@@ -33,6 +33,7 @@ export type FirewallApiKey = {
   enableL2?: boolean;
   enableL3?: boolean;
   killSwitch?: boolean;
+  fingerprintLoopDetect?: boolean;
   sessionTokenLimit?: number | null;
   allowedTools?: string | null;
   blockUnknownTools?: boolean;
@@ -44,6 +45,7 @@ type FirewallForm = {
   enableL2: boolean;
   enableL3: boolean;
   killSwitch: boolean;
+  fingerprintLoopDetect: boolean;
   sessionTokenLimit: number | null;
   allowedTools: string;
   blockUnknownTools: boolean;
@@ -65,11 +67,44 @@ export default function FirewallModal({ apiKey, onClose, onSave }: FirewallModal
     enableL2: apiKey.enableL2 ?? true,
     enableL3: apiKey.enableL3 ?? true,
     killSwitch: apiKey.killSwitch ?? false,
+    fingerprintLoopDetect: apiKey.fingerprintLoopDetect ?? false,
     sessionTokenLimit: apiKey.sessionTokenLimit ?? null,
     allowedTools: apiKey.allowedTools ?? "",
     blockUnknownTools: apiKey.blockUnknownTools ?? false,
     redactPII: apiKey.redactPII ?? false,
   });
+
+  const [discoveredTools, setDiscoveredTools] = useState<string[]>([]);
+  const [deniedTools, setDeniedTools] = useState<Set<string>>(new Set());
+  const [toolsLoading, setToolsLoading] = useState(false);
+
+  const refreshTools = async () => {
+    setToolsLoading(true);
+    try {
+      const res = await fetch(`/api/admin/discovered-tools?vk=${encodeURIComponent(apiKey.virtualKey)}`);
+      if (!res.ok) return;
+      const data = await res.json();
+      setDiscoveredTools(data.discovered || []);
+      setDeniedTools(new Set(data.denied || []));
+    } catch {
+    } finally {
+      setToolsLoading(false);
+    }
+  };
+
+  const toggleTool = async (tool: string, deny: boolean) => {
+    try {
+      const res = await fetch(`/api/admin/discovered-tools?vk=${encodeURIComponent(apiKey.virtualKey)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ tool, deny }),
+      });
+      if (!res.ok) return;
+      const data = await res.json();
+      setDeniedTools(new Set(data.denied || []));
+    } catch {
+    }
+  };
 
   // Submit handler. We coerce the numeric field on the way out
   // because empty <input type="number"> gives us "" not null.
@@ -100,6 +135,16 @@ export default function FirewallModal({ apiKey, onClose, onSave }: FirewallModal
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
+
+  // Auto-refresh discovered tools every 5s. We do this on a
+  // background interval so the operator sees new tools appear
+  // in real time as the agent uses them, without having to
+  // close/reopen the modal.
+  useEffect(() => {
+    refreshTools();
+    const interval = setInterval(refreshTools, 5000);
+    return () => clearInterval(interval);
+  }, [apiKey.virtualKey]);
 
   return (
     <div
@@ -162,7 +207,7 @@ export default function FirewallModal({ apiKey, onClose, onSave }: FirewallModal
             </p>
           </fieldset>
 
-          {/* Kill switch */}
+          {/* Kill switch + soft loop */}
           <fieldset className="border border-red-500/20 rounded-xl p-4 bg-red-500/[0.02]">
             <legend className="text-xs font-bold text-red-300 uppercase tracking-wide px-2 flex items-center gap-2">
               <AlertTriangle className="w-3.5 h-3.5" /> Kill Switch
@@ -174,6 +219,15 @@ export default function FirewallModal({ apiKey, onClose, onSave }: FirewallModal
               color="red"
               help="When the proxy detects a repeated payload hash in the same session, return HTTP 400 with a clear error so the agent stops drifting. Otherwise the loop is logged but requests pass through."
             />
+            <div className="mt-3 pt-3 border-t border-white/5">
+              <ToggleField
+                label="Soft Loop Detect (tool fingerprint)"
+                checked={form.fingerprintLoopDetect}
+                onChange={(v) => setForm({ ...form, fingerprintLoopDetect: v })}
+                color="amber"
+                help="When the same (tool, args) tuple repeats 4× in 30s AND the cache has nothing to re-serve, return HTTP 429 + Retry-After: 60. Read-only tools (todo/plan/think/read_*/list_*/...) are exempt."
+              />
+            </div>
           </fieldset>
 
           {/* Tool filter */}
@@ -253,6 +307,37 @@ export default function FirewallModal({ apiKey, onClose, onSave }: FirewallModal
                 color="amber"
                 help="The proxy strips email-like substrings from the request body before forwarding upstream. Useful for compliance or to keep LLM logs clean."
               />
+            </div>
+          </fieldset>
+
+          {/* Discovered tools */}
+          <fieldset className="border border-white/10 rounded-xl p-4">
+            <legend className="text-xs font-bold text-gray-400 uppercase tracking-wide px-2 flex items-center gap-2">
+              <Wrench className="w-3.5 h-3.5" /> Discovered Tools
+              {toolsLoading && <RefreshCw className="w-3 h-3 animate-spin text-gray-500" />}
+            </legend>
+            <p className="text-[11px] text-gray-500 mt-2 mb-3">
+              Tools your agent has called at least once. Uncheck to deny (HTTP 403 on next call). Auto-refreshes every 5s.
+            </p>
+            <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto">
+              {discoveredTools.length === 0 && !toolsLoading && (
+                <p className="col-span-2 text-xs text-gray-600 italic">
+                  No tools discovered yet. Send a request with tool_calls to populate this list.
+                </p>
+              )}
+              {discoveredTools.map((tool) => (
+                <label key={tool} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-white/5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={!deniedTools.has(tool)}
+                    onChange={(e) => toggleTool(tool, !e.target.checked)}
+                    className="w-4 h-4 accent-cyan-500 cursor-pointer"
+                  />
+                  <span className={`text-sm font-mono ${deniedTools.has(tool) ? "text-red-400 line-through" : "text-gray-200"}`}>
+                    {tool}
+                  </span>
+                </label>
+              ))}
             </div>
           </fieldset>
 

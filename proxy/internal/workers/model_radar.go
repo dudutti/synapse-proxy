@@ -1,4 +1,4 @@
-package workers
+﻿package workers
 
 import (
 	"context"
@@ -18,7 +18,7 @@ const (
 	RadarStatusMapped   ModelRadarStatus = "mapped"
 )
 
-// RadarEntry is a single model entry stored under optitoken:radar:models:{modelID}.
+// RadarEntry is a single model entry stored under Synapse Proxy:radar:models:{modelID}.
 type RadarEntry struct {
 	ModelID    string           `json:"model_id"`
 	Provider   string           `json:"provider"`
@@ -31,9 +31,9 @@ type RadarEntry struct {
 }
 
 const (
-	radarKnownSetKey = "optitoken:radar:known_models" // SET of "provider:modelID"
-	radarEntryPrefix = "optitoken:radar:models:"      // STRING per model, JSON-encoded RadarEntry
-	radarSamplesKey  = "optitoken:radar:samples:"     // LIST of raw responses
+	radarKnownSetKey = "synapse:radar:known_models" // SET of "provider:modelID"
+	radarEntryPrefix = "synapse:radar:models:"      // STRING per model, JSON-encoded RadarEntry
+	radarSamplesKey  = "synapse:radar:samples:"     // LIST of raw responses
 	maxSamplesPerMod = 10
 	radarEntryTTL    = 30 * 24 * time.Hour
 )
@@ -131,7 +131,7 @@ func RegisterKnownModels(ctx context.Context, rdb *redis.Client, provider string
 // PromoteKnown adds a (provider, modelID) pair to the known-models set
 // and upgrades the radar entry from "learning" to "known". Called by the
 // proxy when a previously-unknown model returns a usage block we can
-// parse — this prevents entries from getting stuck in "learning" forever
+// parse â€” this prevents entries from getting stuck in "learning" forever
 // just because the user never visited /v1/providers/models.
 func PromoteKnown(ctx context.Context, rdb *redis.Client, provider, modelID string) {
 	if rdb == nil || modelID == "" || provider == "" {

@@ -1,4 +1,4 @@
-// Package metrics holds lightweight in-process counters used by panic
+﻿// Package metrics holds lightweight in-process counters used by panic
 // recovery, health checks, and Prometheus exposition. Kept separate
 // from the dashboard and workers packages so any handler can import it
 // without pulling in Postgres / Redis.
@@ -79,7 +79,7 @@ func panicSnapshot() map[string]uint64 {
 var (
 	cacheHitCounters   = make(map[string]*uint64)
 	cacheSavedTokens   = make(map[string]*uint64)
-	cacheSavedCostCents = make(map[string]*uint64) // stored as cents (×1000) for atomicity
+	cacheSavedCostCents = make(map[string]*uint64) // stored as cents (Ã—1000) for atomicity
 	cacheHitsMu        sync.RWMutex
 )
 
@@ -204,47 +204,47 @@ func upstreamSnapshot() (buckets []uint64, errors uint64, total uint64) {
 // format (https://prometheus.io/docs/instrumenting/exposition_formats/).
 // Always returns a 200 with Content-Type "text/plain; version=0.0.4".
 func WritePrometheus(w io.Writer) {
-	fmt.Fprintln(w, "# HELP optitoken_cache_hits_total Cache hits since process start, by level")
-	fmt.Fprintln(w, "# TYPE optitoken_cache_hits_total counter")
+	fmt.Fprintln(w, "# HELP synapse_proxy_cache_hits_total Cache hits since process start, by level")
+	fmt.Fprintln(w, "# TYPE synapse_proxy_cache_hits_total counter")
 	for _, level := range sortedKeys(CacheHits()) {
-		fmt.Fprintf(w, "optitoken_cache_hits_total{cache_level=%q} %d\n", level, CacheHits()[level])
+		fmt.Fprintf(w, "synapse_proxy_cache_hits_total{cache_level=%q} %d\n", level, CacheHits()[level])
 	}
 
-	fmt.Fprintln(w, "# HELP optitoken_tokens_saved_total Tokens saved from cache, by level")
-	fmt.Fprintln(w, "# TYPE optitoken_tokens_saved_total counter")
+	fmt.Fprintln(w, "# HELP synapse_proxy_tokens_saved_total Tokens saved from cache, by level")
+	fmt.Fprintln(w, "# TYPE synapse_proxy_tokens_saved_total counter")
 	for _, level := range sortedKeys(cacheSavedTokensSnapshot()) {
-		fmt.Fprintf(w, "optitoken_tokens_saved_total{cache_level=%q} %d\n", level, cacheSavedTokensSnapshot()[level])
+		fmt.Fprintf(w, "synapse_proxy_tokens_saved_total{cache_level=%q} %d\n", level, cacheSavedTokensSnapshot()[level])
 	}
 
-	fmt.Fprintln(w, "# HELP optitoken_cost_saved_total Cost saved in millicents (1/1000 USD), by level")
-	fmt.Fprintln(w, "# TYPE optitoken_cost_saved_total counter")
+	fmt.Fprintln(w, "# HELP synapse_proxy_cost_saved_total Cost saved in millicents (1/1000 USD), by level")
+	fmt.Fprintln(w, "# TYPE synapse_proxy_cost_saved_total counter")
 	for _, level := range sortedKeys(cacheSavedCostCentsSnapshot()) {
-		fmt.Fprintf(w, "optitoken_cost_saved_total{cache_level=%q} %d\n", level, cacheSavedCostCentsSnapshot()[level])
+		fmt.Fprintf(w, "synapse_proxy_cost_saved_total{cache_level=%q} %d\n", level, cacheSavedCostCentsSnapshot()[level])
 	}
 
-	fmt.Fprintln(w, "# HELP optitoken_panics_total Panics recovered, by handler")
-	fmt.Fprintln(w, "# TYPE optitoken_panics_total counter")
+	fmt.Fprintln(w, "# HELP synapse_proxy_panics_total Panics recovered, by handler")
+	fmt.Fprintln(w, "# TYPE synapse_proxy_panics_total counter")
 	for _, handler := range sortedKeys(panicSnapshot()) {
-		fmt.Fprintf(w, "optitoken_panics_total{handler=%q} %d\n", handler, panicSnapshot()[handler])
+		fmt.Fprintf(w, "synapse_proxy_panics_total{handler=%q} %d\n", handler, panicSnapshot()[handler])
 	}
 
 	buckets, errors, total := upstreamSnapshot()
 	labels := []string{"le_10ms", "le_100ms", "le_500ms", "le_2s", "ge_2s"}
-	fmt.Fprintln(w, "# HELP optitoken_upstream_latency_seconds Upstream latency in coarse buckets")
-	fmt.Fprintln(w, "# TYPE optitoken_upstream_latency_seconds counter")
+	fmt.Fprintln(w, "# HELP synapse_proxy_upstream_latency_seconds Upstream latency in coarse buckets")
+	fmt.Fprintln(w, "# TYPE synapse_proxy_upstream_latency_seconds counter")
 	for i, label := range labels {
 		if i < len(buckets) {
-			fmt.Fprintf(w, "optitoken_upstream_latency_seconds_bucket{le=%q} %d\n", label, buckets[i])
+			fmt.Fprintf(w, "synapse_proxy_upstream_latency_seconds_bucket{le=%q} %d\n", label, buckets[i])
 		}
 	}
 
-	fmt.Fprintln(w, "# HELP optitoken_upstream_requests_total Total upstream requests")
-	fmt.Fprintln(w, "# TYPE optitoken_upstream_requests_total counter")
-	fmt.Fprintf(w, "optitoken_upstream_requests_total %d\n", total)
+	fmt.Fprintln(w, "# HELP synapse_proxy_upstream_requests_total Total upstream requests")
+	fmt.Fprintln(w, "# TYPE synapse_proxy_upstream_requests_total counter")
+	fmt.Fprintf(w, "synapse_proxy_upstream_requests_total %d\n", total)
 
-	fmt.Fprintln(w, "# HELP optitoken_upstream_errors_total Upstream requests with status >= 400")
-	fmt.Fprintln(w, "# TYPE optitoken_upstream_errors_total counter")
-	fmt.Fprintf(w, "optitoken_upstream_errors_total %d\n", errors)
+	fmt.Fprintln(w, "# HELP synapse_proxy_upstream_errors_total Upstream requests with status >= 400")
+	fmt.Fprintln(w, "# TYPE synapse_proxy_upstream_errors_total counter")
+	fmt.Fprintf(w, "synapse_proxy_upstream_errors_total %d\n", errors)
 }
 
 // Handler returns an http.HandlerFunc that writes the Prometheus text

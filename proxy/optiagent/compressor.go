@@ -1,4 +1,4 @@
-package optiagent
+﻿package optiagent
 
 import (
 	"encoding/json"
@@ -62,7 +62,7 @@ func CompressPayload(payload []byte) ([]byte, error) {
 		// 1b. Strip reasoning_content from previous assistant turns.
 		// Thinking models (DeepSeek-R1, MiniMax M3, Qwen QwQ, Gemma) return
 		// reasoning as a sibling field of content. Clients re-send the whole
-		// assistant turn as input context, which is pure waste — observed
+		// assistant turn as input context, which is pure waste â€” observed
 		// at 89% of input tokens on agentic workloads. Only prune turns that
 		// are not the most recent assistant message.
 		if role == "assistant" && !isRecentMessage {
@@ -86,18 +86,18 @@ func CompressPayload(payload []byte) ([]byte, error) {
 			if !isRecentMessage && hasContent && len(contentStr) > 200 {
 				// Keep the first N chars + a trailing ellipsis. The agent
 				// can still see the head of the result; the tail is just
-				// gone (we already injected the [OptiToken] compaction
+				// gone (we already injected the [Synapse Proxy] compaction
 				// hint at the very first system turn, so the model knows
 				// older tool results may be truncated).
 				const keep = 200
 				if len(contentStr) > keep+50 {
-					msg["content"] = contentStr[:keep] + "\n[…truncated by OptiToken L3…]"
+					msg["content"] = contentStr[:keep] + "\n[â€¦truncated by Synapse Proxy L3â€¦]"
 				}
 			}
 
 			if name == lastToolName && name != "" {
 				consecutiveToolCount++
-				// Drop repeated tool results beyond the first 2 — just
+				// Drop repeated tool results beyond the first 2 â€” just
 				// replace with a minimal valid JSON that the agent can
 				// parse without flagging as injection.
 				if consecutiveToolCount > 2 && !isRecentMessage {

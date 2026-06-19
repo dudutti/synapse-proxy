@@ -1,6 +1,6 @@
-#!/bin/sh
+﻿#!/bin/sh
 echo "=== Last 10 BenchmarkLog rows (orig vs opt) ==="
-docker exec optitoken-postgres psql -U optitoken_admin -d optitoken_db -c "
+docker exec synapse-proxy-postgres psql -U synapse-proxy_admin -d synapse-proxy_db -c "
 SELECT
   id,
   \"createdAt\",
@@ -20,7 +20,7 @@ LIMIT 10;
 
 echo ""
 echo "=== Aggregate stats ==="
-docker exec optitoken-postgres psql -U optitoken_admin -d optitoken_db -c "
+docker exec synapse-proxy-postgres psql -U synapse-proxy_admin -d synapse-proxy_db -c "
 SELECT
   COUNT(*) as n,
   AVG(\"promptTokensOrig\")::int as avg_orig_prompt,

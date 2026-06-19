@@ -10,9 +10,9 @@ import (
 	"strconv"
 	"time"
 
-	"optitoken/internal/db"
-	"optitoken/internal/metrics"
-	"optitoken/internal/utils"
+	"synapse-proxy/internal/db"
+	"synapse-proxy/internal/metrics"
+	"synapse-proxy/internal/utils"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -26,6 +26,11 @@ func PushTelemetry(
 	cacheCreationTokens, cacheReadTokens, cacheHitTokens, cacheMissTokens int,
 	agentID, agentLabel, sessionID string,
 	zeroLog bool,
+	toolCalls string,
+	isSimulated bool,
+	killSwitchFired bool,
+	turnCount int,
+	convSignature string,
 ) {
 	ctx := context.Background()
 	rdb := db.GetRedis()
@@ -63,7 +68,7 @@ func PushTelemetry(
 	)
 
 	// Increment Prometheus counters (see metrics package). Skip the
-	// "NONE" bucket — that's the upstream path, not a cache hit, and
+	// "NONE" bucket â€” that's the upstream path, not a cache hit, and
 	// we don't want to confuse cache_hit_rate with "proxy worked".
 	if cacheLevel != "" && cacheLevel != "NONE" {
 		tokensSaved := uint64(promptSaved + compSaved)
@@ -92,6 +97,8 @@ func PushTelemetry(
 		"agent_id":              agentID,
 		"agent_label":           agentLabel,
 		"session_id":            sessionID,
+		"turn_count":            turnCount,
+		"conv_signature":        convSignature,
 	}
 
 	// Zero-Log Mode: drop the prompt/response content. The metadata
@@ -106,7 +113,7 @@ func PushTelemetry(
 	}
 	// Compute payloadHash from the original request body. The proxy
 	// computes this too (for its L1/L2 cache keys), but for the
-	// BYPASS path it stays as "" — so we recompute here on the worker
+	// BYPASS path it stays as "" â€” so we recompute here on the worker
 	// side to make sure every RequestLog row has a usable hash for
 	// /api/admin/expensive-prompts groupBy.
 	var payloadHash string
@@ -118,10 +125,21 @@ func PushTelemetry(
 	logData["opt_payload"] = optPayload
 	logData["response_payload"] = responsePayload
 	logData["payload_hash"] = payloadHash
+	logData["tool_calls"] = toolCalls
+	if isSimulated {
+		logData["is_simulated"] = "true"
+	} else {
+		logData["is_simulated"] = "false"
+	}
+	if killSwitchFired {
+		logData["kill_switch_fired"] = "true"
+	} else {
+		logData["kill_switch_fired"] = "false"
+	}
 	_ = zeroLog // already used above
 
 	_, err := rdb.XAdd(ctx, &redis.XAddArgs{
-		Stream: "optitoken:telemetry:logs",
+		Stream: "synapse:telemetry:logs",
 		// Cap the stream at 100k entries. The "~" is approximate
 		// trimming (O(1) amortized) so we don't pay a linear cost on
 		// every XAdd. At 100k entries (~50 KB each on average) the
@@ -194,6 +212,18 @@ func RunTelemetryMigrations() {
 	if _, err := postgresDB.Exec(`CREATE INDEX IF NOT EXISTS "RequestLog_agentId_createdAt_idx" ON "RequestLog" ("agentId", "createdAt" DESC)`); err != nil {
 		log.Printf("Telemetry migration warning (agentId_createdAt idx): %v", err)
 	}
+	
+	// Agent Flow & Firewall
+	if _, err := postgresDB.Exec(`ALTER TABLE "RequestLog" ADD COLUMN IF NOT EXISTS "toolCalls" TEXT`); err != nil {
+		log.Printf("Telemetry migration warning (toolCalls): %v", err)
+	}
+	if _, err := postgresDB.Exec(`ALTER TABLE "RequestLog" ADD COLUMN IF NOT EXISTS "isSimulated" BOOLEAN NOT NULL DEFAULT false`); err != nil {
+		log.Printf("Telemetry migration warning (isSimulated): %v", err)
+	}
+	if _, err := postgresDB.Exec(`ALTER TABLE "RequestLog" ADD COLUMN IF NOT EXISTS "killSwitchFired" BOOLEAN NOT NULL DEFAULT false`); err != nil {
+		log.Printf("Telemetry migration warning (killSwitchFired): %v", err)
+	}
+
 	// ProviderModel columns (pricing per class)
 	if _, err := postgresDB.Exec(`ALTER TABLE "ProviderModel" ADD COLUMN IF NOT EXISTS "costCachedInputPer1M" DOUBLE PRECISION`); err != nil {
 		log.Printf("Telemetry migration warning (ProviderModel.costCachedInputPer1M): %v", err)
@@ -209,14 +239,14 @@ func ConsumeTelemetryWorker() {
 	rdb := db.GetRedis()
 	postgresDB := db.GetDB()
 
-	rdb.XGroupCreateMkStream(ctx, "optitoken:telemetry:logs", "telemetry_group", "0").Err()
+	rdb.XGroupCreateMkStream(ctx, "synapse:telemetry:logs", "telemetry_group", "0").Err()
 	log.Println("Background Telemetry Worker Started")
 
 	for {
 		res, err := rdb.XReadGroup(ctx, &redis.XReadGroupArgs{
 			Group:    "telemetry_group",
 			Consumer: "worker-1",
-			Streams:  []string{"optitoken:telemetry:logs", ">"},
+			Streams:  []string{"synapse:telemetry:logs", ">"},
 			Count:    10,
 			Block:    2 * time.Second,
 		}).Result()
@@ -247,16 +277,27 @@ func ConsumeTelemetryWorker() {
 			durMs, _ := strconv.Atoi(fmt.Sprint(msg.Values["duration_ms"]))
 			agentID := fmt.Sprint(msg.Values["agent_id"])
 			agentLabel := fmt.Sprint(msg.Values["agent_label"])
-			sessionID := fmt.Sprint(msg.Values["session_id"])
-			if agentID == "<nil>" {
-				agentID = ""
+sessionID := fmt.Sprint(msg.Values["session_id"])
+	if agentID == "<nil>" {
+		agentID = ""
+	}
+	if agentLabel == "<nil>" {
+		agentLabel = ""
+	}
+	if sessionID == "<nil>" {
+		sessionID = ""
+	}
+	turnCount, _ := strconv.Atoi(fmt.Sprint(msg.Values["turn_count"]))
+	convSignature := fmt.Sprint(msg.Values["conv_signature"])
+	if convSignature == "<nil>" {
+		convSignature = ""
+	}
+			toolCalls := fmt.Sprint(msg.Values["tool_calls"])
+			if toolCalls == "<nil>" {
+				toolCalls = ""
 			}
-			if agentLabel == "<nil>" {
-				agentLabel = ""
-			}
-			if sessionID == "<nil>" {
-				sessionID = ""
-			}
+			isSimulated := fmt.Sprint(msg.Values["is_simulated"]) == "true"
+			killSwitchFired := fmt.Sprint(msg.Values["kill_switch_fired"]) == "true"
 
 			promptSaved := promptOrig - promptOpt
 			if promptSaved < 0 {
@@ -290,8 +331,8 @@ func ConsumeTelemetryWorker() {
 				payloadHash = ""
 			}
 
-			// Two-query approach — much simpler than a single INSERT…SELECT
-			// and impossible to misalign. We previously had INSERT…SELECT
+			// Two-query approach â€” much simpler than a single INSERTâ€¦SELECT
+			// and impossible to misalign. We previously had INSERTâ€¦SELECT
 			// FROM "ApiKey" WHERE "virtualKey" = $1 with column counts that
 			// kept drifting by 1 every time we added a column to the
 			// schema. Splitting the lookup from the insert eliminates the
@@ -304,12 +345,12 @@ func ConsumeTelemetryWorker() {
 			).Scan(&apiKeyID)
 			if err != nil {
 				log.Printf("DB apiKey lookup failed for vk=%s: %v", vk, err)
-				rdb.XAck(ctx, "optitoken:telemetry:logs", "telemetry_group", msg.ID)
+				rdb.XAck(ctx, "synapse:telemetry:logs", "telemetry_group", msg.ID)
 				continue
 			}
 
 			// Step 2: insert with 27 explicit values. createdAt is omitted
-			// entirely so the DB default (CURRENT_TIMESTAMP) fires — we
+			// entirely so the DB default (CURRENT_TIMESTAMP) fires â€” we
 			// MUST NOT include it in the column list or VALUES, otherwise
 			// we shift every subsequent column by one and get a "more
 			// expressions than target columns" error. Same for the id
@@ -327,11 +368,11 @@ func ConsumeTelemetryWorker() {
 			//   $17=savingsCacheCreation, $18=savingsOutput,
 			//   $19=cacheLevel, $20=durationMs,
 			//   $21=originalPayload, $22=optimizedPayload,
-			//   (createdAt omitted — DB default)
+			//   (createdAt omitted â€” DB default)
 			//   $23=agentId, $24=agentLabel, $25=sessionId,
 			//   $26=responsePayload, $27=payloadHash
 			//
-			// 27 columns listed → 27 explicit values → 26 params + gen_random_uuid → match.
+			// 27 columns listed â†’ 27 explicit values â†’ 26 params + gen_random_uuid â†’ match.
 			_, err = postgresDB.Exec(`
 				INSERT INTO "RequestLog" (
 					id, "apiKeyId", provider, model,
@@ -344,11 +385,13 @@ func ConsumeTelemetryWorker() {
 					"cacheLevel", "durationMs",
 					"originalPayload", "optimizedPayload",
 					"agentId", "agentLabel", "sessionId",
-					"responsePayload", "payloadHash"
+					"responsePayload", "payloadHash",
+					"toolCalls", "isSimulated", "killSwitchFired",
+					"turnCount", "convSignature"
 				) VALUES (
 					gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
 					$13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
-					$25, $26
+					$25, $26, $27, $28, $29, $30, $31
 				)
 			`,
 				apiKeyID, prov, model,
@@ -362,10 +405,12 @@ func ConsumeTelemetryWorker() {
 				origPayload, optPayload,
 				agentID, agentLabel, sessionID,
 				responsePayload, payloadHash,
+				toolCalls, isSimulated, killSwitchFired,
+				turnCount, convSignature,
 			)
 
 			if err == nil {
-				rdb.XAck(ctx, "optitoken:telemetry:logs", "telemetry_group", msg.ID)
+				rdb.XAck(ctx, "synapse:telemetry:logs", "telemetry_group", msg.ID)
 			} else {
 				log.Printf("DB Insert failed: %v", err)
 			}
@@ -538,7 +583,7 @@ func aggregateAndSaveStats(ctx context.Context, postgresDB *sql.DB, rdb *redis.C
 
 	jsonData, err := json.Marshal(stats)
 	if err == nil {
-		rdb.Set(ctx, "optitoken:global_stats", jsonData, 10*time.Minute)
+		rdb.Set(ctx, "synapse:global_stats", jsonData, 10*time.Minute)
 	} else {
 		log.Printf("GlobalStats: Error marshaling json: %v", err)
 	}

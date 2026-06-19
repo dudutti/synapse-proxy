@@ -42,11 +42,11 @@
 | `claude-haiku-4.5` | $1.00 | $1.25 | $2.00 | $0.10 | $5.00 | Actif |
 | `claude-haiku-3.5` | $0.80 | $1.00 | $1.60 | $0.08 | $4.00 | Retired (Bedrock/Vertex only) |
 
-### 💡 Notes OptiToken × Anthropic
+### 💡 Notes Synapse Proxy × Anthropic
 
 - **Cache hit à 0.1×** = 10% du prix base, identique à OpenAI (~90% de réduction). Le L1 cache natif Anthropic concurrence directement notre L1.
-- **Cache write coûte plus cher** que le base input (×1.25 à ×2) → si OptiToken réduit les tokens AVANT le cache write, on économise aussi sur l'écriture cache.
-- **Output très élevé** : claude-fable-5 à $50/MTok, claude-opus-4.x à $25/MTok. OptiToken ne réduit pas l'output directement, mais un prompt mieux structuré = réponse plus concise = moins d'output tokens.
+- **Cache write coûte plus cher** que le base input (×1.25 à ×2) → si Synapse Proxy réduit les tokens AVANT le cache write, on économise aussi sur l'écriture cache.
+- **Output très élevé** : claude-fable-5 à $50/MTok, claude-opus-4.x à $25/MTok. Synapse Proxy ne réduit pas l'output directement, mais un prompt mieux structuré = réponse plus concise = moins d'output tokens.
 - **Client idéal Anthropic** : utilisateurs de claude-opus-4.x et claude-fable-5 avec longs contextes agents/RAG. ROI immédiat.
 - **Modèles à éviter comme cible** : claude-haiku-3.5 ($0.80 input) → ROI difficile.
 
@@ -107,21 +107,21 @@
 
 ---
 
-### 💡 Notes OptiToken × Google (toutes générations)
+### 💡 Notes Synapse Proxy × Google (toutes générations)
 
-- **⚡ Bonus volume tier (critique)** : sur `gemini-2.5-pro`, dépasser 200K tokens **double le prix** ($1.25→$2.50 input, $10→$15 output). Sur `gemini-3.1-pro` idem ($2→$4). Si OptiToken compresse un contexte de 210K → 140K tokens : on passe sous le seuil **et** on réduit les tokens. **Économie potentielle ×3 sur une seule requête.**
+- **⚡ Bonus volume tier (critique)** : sur `gemini-2.5-pro`, dépasser 200K tokens **double le prix** ($1.25→$2.50 input, $10→$15 output). Sur `gemini-3.1-pro` idem ($2→$4). Si Synapse Proxy compresse un contexte de 210K → 140K tokens : on passe sous le seuil **et** on réduit les tokens. **Économie potentielle ×3 sur une seule requête.**
 - **Cache à ~10%** identique à Anthropic — notre L1/L2 cache (évite 100% du coût) reste plus compétitif que le cache natif Google.
 - **Output raisonnement inclus dans le prix output** → attention au calcul ROI, ne pas confondre avec OpenAI.
-- **Modèles à éviter comme cible** : `gemini-2.5-flash-lite` ($0.10), `gemini-3.1-flash-lite` ($0.25) → ROI OptiToken difficile.
+- **Modèles à éviter comme cible** : `gemini-2.5-flash-lite` ($0.10), `gemini-3.1-flash-lite` ($0.25) → ROI Synapse Proxy difficile.
 - **Client idéal Google** : `gemini-2.5-pro` et `gemini-3.1-pro` avec contextes >150K tokens (juste sous le seuil 200K). La compression repousse le franchissement du palier tarifaire.
-- **Live API** : OptiToken ne peut pas agir sur le voice-to-voice temps réel (pas de proxy applicable). Hors scope.
-- **Image output à $30-120/MTok** : OptiToken n'intervient pas sur l'output image.
+- **Live API** : Synapse Proxy ne peut pas agir sur le voice-to-voice temps réel (pas de proxy applicable). Hors scope.
+- **Image output à $30-120/MTok** : Synapse Proxy n'intervient pas sur l'output image.
 
 ---
 
 ## Mistral
 
-> ✅ **Avantage OptiToken majeur** : Mistral n'a **pas de cache natif** sur la plupart de ses modèles. Notre L1/L2 cache est donc sans concurrence — 100% d'économie sur les prompts répétés sans que Mistral puisse offrir l'équivalent.
+> ✅ **Avantage Synapse Proxy majeur** : Mistral n'a **pas de cache natif** sur la plupart de ses modèles. Notre L1/L2 cache est donc sans concurrence — 100% d'économie sur les prompts répétés sans que Mistral puisse offrir l'équivalent.
 
 ### Modèles texte & raisonnement
 
@@ -183,14 +183,14 @@
 | Libraries / OCR | $3 / 1K pages + $1/MTok indexing |
 | Data capture | $0.04/MTok |
 
-### 💡 Notes OptiToken × Mistral
+### 💡 Notes Synapse Proxy × Mistral
 
 - **✅ Pas de cache natif Mistral** → notre L1 (exact match) et L2 (semantic match) sont sans équivalent. Chaque hit = 100% d'économie là où OpenAI/Anthropic/Google font 90%.
 - **`Magistral Medium` à $2/$5** : modèle reasoning compétitif vs GPT-5.4 ($2.50/$15). Fort potentiel car l'output est ×3 moins cher. La compression input est rentable rapidement.
-- **`Mistral Large 3` à $0.50/$1.50** : très bon rapport qualité/prix. ROI OptiToken modéré mais la réduction input reste bénéfique sur gros volumes.
+- **`Mistral Large 3` à $0.50/$1.50** : très bon rapport qualité/prix. ROI Synapse Proxy modéré mais la réduction input reste bénéfique sur gros volumes.
 - **`Mistral Medium 3.5` à $1.50/$7.50** : output coûteux pour un flagship. Bon candidat pour la compression des prompts agents.
-- **Modèles Ministral/Small/NeMo** (<$0.20) → ROI OptiToken difficile à justifier.
-- **Voix/OCR/Tools** : hors scope OptiToken (pas de proxy applicable sur ces endpoints).
+- **Modèles Ministral/Small/NeMo** (<$0.20) → ROI Synapse Proxy difficile à justifier.
+- **Voix/OCR/Tools** : hors scope Synapse Proxy (pas de proxy applicable sur ces endpoints).
 
 
 ---
@@ -220,15 +220,15 @@
 | FIM Completion | Non-thinking only | Non-thinking only |
 | Format API | OpenAI + **Anthropic** | OpenAI + **Anthropic** |
 
-### 💡 Notes OptiToken × DeepSeek
+### 💡 Notes Synapse Proxy × DeepSeek
 
 - **🔥 Cache hit à 98-99%** : la remise la plus agressive du marché, bien au-delà d'OpenAI/Anthropic (90%). Cela signifie que les tokens en cache coûtent presque rien. Notre L1/L2 cache (100% d'économie) reste quand même supérieur mais l'avantage différentiel est réduit vs les autres providers.
-- **⚡ Le vrai ROI OptiToken sur DeepSeek** : sur les **cache MISS** ($0.14/$0.435). Si un prompt n'est pas en cache DeepSeek (premier appel, contexte nouveau), OptiToken L3 compresse → moins de tokens facturés au plein tarif.
+- **⚡ Le vrai ROI Synapse Proxy sur DeepSeek** : sur les **cache MISS** ($0.14/$0.435). Si un prompt n'est pas en cache DeepSeek (premier appel, contexte nouveau), Synapse Proxy L3 compresse → moins de tokens facturés au plein tarif.
 - **🧠 Contexte 1M tokens = opportunité L3 majeure** : les utilisateurs qui remplissent des contextes longs (RAG massif, agents avec long historique) envoient des centaines de milliers de tokens. À $0.14/MTok (Flash), 500K tokens = $0.07 par requête. Une compression 30% → $0.021 d'économie par appel, rentable sur volumes.
 - **Thinking mode activé par défaut** → les prompts agents DeepSeek tendent à être longs et répétitifs. Fort candidat pour L2 (semantic cache) et L3 (compression).
-- **Compatible Anthropic format** : les clients qui migrent depuis Claude peuvent pointer vers DeepSeek sans changer de code → OptiToken intercepte les deux formats nativement.
+- **Compatible Anthropic format** : les clients qui migrent depuis Claude peuvent pointer vers DeepSeek sans changer de code → Synapse Proxy intercepte les deux formats nativement.
 - **Modèle Flash à ne pas négliger** : $0.14 input semble bas, mais à 2500 req/s de concurrence max, les gros utilisateurs envoient des volumes massifs → ROI scale bien.
-- **V4 Pro à $0.435** : cible premium, ROI OptiToken solide dès 5K-10K req/mois avec prompts moyens.
+- **V4 Pro à $0.435** : cible premium, ROI Synapse Proxy solide dès 5K-10K req/mois avec prompts moyens.
 
 
 
@@ -278,19 +278,19 @@
 ## 📐 Formules de calcul ROI (pour le super admin)
 
 ```
-// Coût mensuel sans OptiToken
+// Coût mensuel sans Synapse Proxy
 cost_raw = (total_prompt_tokens / 1_000_000) * price_input
          + (total_completion_tokens / 1_000_000) * price_output
 
-// Coût mensuel avec OptiToken
+// Coût mensuel avec Synapse Proxy
 cost_opt = (total_prompt_tokens_opt / 1_000_000) * price_input
          + (total_completion_tokens / 1_000_000) * price_output
 
 // Économie brute
 savings = cost_raw - cost_opt
 
-// ROI (net de l'abonnement OptiToken)
-roi_net = savings - optitoken_monthly_fee
+// ROI (net de l'abonnement Synapse Proxy)
+roi_net = savings - Synapse Proxy_monthly_fee
 
 // Ratio de compression
 compression_ratio = 1 - (total_prompt_tokens_opt / total_prompt_tokens)
@@ -298,11 +298,11 @@ compression_ratio = 1 - (total_prompt_tokens_opt / total_prompt_tokens)
 
 ---
 
-## 💡 Seuils de rentabilité par plan OptiToken
+## 💡 Seuils de rentabilité par plan Synapse Proxy
 
 Basé sur une compression moyenne de **30%** et le modèle **gpt-5.5** ($5/1M) :
 
-| Plan OptiToken | Prix/mois | Break-even (req × 500 tokens) | Modèle minimum recommandé |
+| Plan Synapse Proxy | Prix/mois | Break-even (req × 500 tokens) | Modèle minimum recommandé |
 |---|---|---|---|
 | Dev (9€) | $10 | ~6 700 req | gpt-5.4+ ($2.50) |
 | Team (29€) | $32 | ~21 000 req | gpt-5.4+ ou gpt-4o |
@@ -313,4 +313,4 @@ Basé sur une compression moyenne de **30%** et le modèle **gpt-5.5** ($5/1M) :
 | Scale (79€) | $87 | ~9 700 req | ROI ×5 à ×20 |
 
 > **Conclusion** : Sur les modèles nano/mini (<$1/1M), le ROI est difficile.  
-> Sur gpt-5.5, gpt-5.5-pro, gpt-5.4-pro, claude-opus → OptiToken est rentable dès les premières centaines de requêtes.
+> Sur gpt-5.5, gpt-5.5-pro, gpt-5.4-pro, claude-opus → Synapse Proxy est rentable dès les premières centaines de requêtes.
