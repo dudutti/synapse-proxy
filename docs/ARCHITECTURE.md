@@ -1,4 +1,4 @@
-﻿# Synapse Proxy â€” Architecture
+# Synapse Proxy â€” Architecture
 
 This document is the technical reference for how Synapse Proxy is built. It mirrors the structure of the source code so a new contributor can navigate from here to `proxy/internal/...` and find what they're looking for.
 
@@ -9,32 +9,32 @@ This is the system that runs in production. Every section below is sourced from 
 ```mermaid
 graph TB
     subgraph ClientSide[" "]
-        Agent["Agent / SDK / curl<br/>(Hermes, Claude Code, LangChain, â€¦)"]
+        Agent["Agent / SDK / curl (Hermes, Claude Code, LangChain, ...)"]
     end
 
     subgraph Edge["Edge layer"]
-        Caddy["Caddy 2<br/>:80 / :443 â€” TLS, auto-HTTPS"]
+        Caddy["Caddy 2 :80 / :443 - TLS, auto-HTTPS"]
     end
 
     subgraph ProxyHost["Synapse Proxy host"]
-        Proxy["Go binary (Synapse Proxy-server)<br/>:8080<br/>single binary, CGO_ENABLED=0"]
-        ONNX["Python ONNX service<br/>:8000 â€” multilingual-MiniLM-L12-v2<br/>384-dim embeddings"]
+        Proxy["Go binary (Synapse Proxy-server) :8080 - single binary, CGO_ENABLED=0"]
+        ONNX["Python ONNX service :8000 - multilingual-MiniLM-L12-v2 384-dim embeddings"]
     end
 
     subgraph DataLayer["State"]
-        Redis[("Redis Stack<br/>VSS index idx:l2cache<br/>L0 locks, L1 keys, L2 vectors, session tags, model radar")]
-        Postgres[("PostgreSQL 15<br/>User, ApiKey, RequestLog,<br/>BenchmarkLog, AlertRule,<br/>AlertEvent, ProviderModel")]
+        Redis[("Redis Stack - VSS index idx:l2cache, L0 locks, L1 keys, L2 vectors, session tags, model radar")]
+        Postgres[("PostgreSQL 15 - User, ApiKey, RequestLog, BenchmarkLog, AlertRule, AlertEvent, ProviderModel")]
     end
 
     subgraph Upstream["Upstream providers"]
-        OpenAI["OpenAI / Anthropic /<br/>MiniMax / any OpenAI-compatible"]
+        OpenAI["OpenAI / Anthropic / MiniMax / any OpenAI-compatible"]
     end
 
     subgraph SaaS["Hosted dashboard (closed source)"]
-        Dashboard["Next.js 14 + Prisma<br/>synapse-proxy.com"]
+        Dashboard["Next.js 14 + Prisma - synapse-proxy.com"]
     end
 
-    Agent -->|HTTPS + Bearer sk-opti-â€¦| Caddy
+    Agent -->|HTTPS + Bearer sk-opti-...| Caddy
     Caddy -->|HTTP /v1/...| Proxy
     Proxy -.->|/embed (HTTP)| ONNX
     Proxy <-->|HGETALL / SETNX / XADD / FT.SEARCH| Redis
