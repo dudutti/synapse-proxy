@@ -175,6 +175,11 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		sessionID = dbTag
 	}
 
+	// Cache completed tool calls from the history
+	if rdb != nil && virtualKey != "" {
+		optiagent.StoreCompletedToolCalls(ctx, rdb, virtualKey, bodyBytes)
+	}
+
 	// Feature 3: Compaction hint â€” inject a system note so the agent
 	// knows that previous tool outputs may have been summarized. Only
 	// on the first turn of a session (or whenever the body has not
@@ -370,7 +375,7 @@ go workers.PushTelemetry(virtualKey, provider, reqModel, 0, 0, 0, 0, 0,
 	}
 
 	if !isBypass {
-		optResult, err = optiagent.ProcessRequest(ctx, rdb, bodyBytes, semanticTolerance, virtualKey, isolateCache, forceDisableL2, keyConfig.EnableL1, keyConfig.EnableL2, keyConfig.EnableL3, keyConfig.LimitExceeded, cacheTtl)
+		optResult, err = optiagent.ProcessRequest(ctx, rdb, bodyBytes, semanticTolerance, virtualKey, isolateCache, forceDisableL2, keyConfig.EnableL1, keyConfig.EnableL2, keyConfig.EnableL3, keyConfig.LimitExceeded, cacheTtl, keyConfig.ToolTtls)
 		if err != nil {
 			http.Error(w, "Optimization engine failure", http.StatusInternalServerError)
 			return
@@ -441,15 +446,20 @@ go workers.PushTelemetry(virtualKey, provider, reqModel,
 			hashPrefix, reqModel)
 
 		if loopResult.TriggerKillSwitch {
-			log.Printf("[ProxyHandler] KILL SWITCH FIRED for session %s", sessionID)
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusBadRequest)
-			w.Write([]byte(`{"error": {"message": "Loop detected. Agent drift stopped by Synapse Proxy kill switch."}}`))
+			log.Printf("[ProxyHandler] KILL SWITCH FIRED for session %s (returning self-correction hint)", sessionID)
+			
+			hintBytes := makeSelfCorrectionResponse("", reqModel)
+			if wantStream {
+				streamCachedResponse(w, hintBytes, reqModel)
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(hintBytes)
+			}
 
-// Telemetry: log the kill switch hit
+			// Telemetry: log the kill switch hit
 			go workers.PushTelemetry(virtualKey, provider, reqModel,
 				optResult.PromptTokensOrig, 0, optResult.PromptTokensOpt, 0, 0,
-				"NONE", time.Since(startTime), string(bodyBytes), string(optResult.Payload), `{"error":"kill_switch"}`,
+				"NONE", time.Since(startTime), string(bodyBytes), string(optResult.Payload), `{"error":"kill_switch_hint"}`,
 				0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog,
 				toolCallsStr, keyConfig.LimitExceeded, true,
 				turnCount, convSignature)
@@ -479,21 +489,26 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 		return
 	}
 
-	// Soft-loop 429: cache missed AND fingerprint observed. See
+	// Soft-loop self-correction hint: cache missed AND fingerprint observed. See
 	// docs/agent_firewall.md for the strategy.
 	if fpCount := w.Header().Get("X-Synapse-Fingerprint-Count"); fpCount != "" && !keyConfig.KillSwitch {
 		count, _ := strconv.Atoi(fpCount)
 		if count >= optiagent.FingerprintThreshold {
 			fpTool := w.Header().Get("X-Synapse-Fingerprint-Tool")
-			log.Printf("[ProxyHandler] SOFT LOOP BLOCK: tool=%s count=%d (vk=%s) — cache miss, returning 429",
+			log.Printf("[ProxyHandler] SOFT LOOP BLOCK: tool=%s count=%d (vk=%s) — cache miss, returning self-correction hint",
 				fpTool, count, virtualKey)
-			w.Header().Set("Retry-After", strconv.Itoa(optiagent.FingerprintRetryAfterSecs))
-			w.WriteHeader(http.StatusTooManyRequests)
-			w.Write([]byte(`{"error": {"message": "Soft loop detected and no cached answer available. The proxy stopped the request to protect upstream quota. Wait 60s or disable Soft Loop Detect in the Agent Firewall.","tool":"` + fpTool + `","count":` + fpCount + `,"retry_after_seconds":` + strconv.Itoa(optiagent.FingerprintRetryAfterSecs) + `}}`))
+
+			hintBytes := makeSelfCorrectionResponse(fpTool, reqModel)
+			if wantStream {
+				streamCachedResponse(w, hintBytes, reqModel)
+			} else {
+				w.Header().Set("Content-Type", "application/json")
+				w.Write(hintBytes)
+			}
 
 			go workers.PushTelemetry(virtualKey, provider, reqModel,
 				optResult.PromptTokensOrig, 0, optResult.PromptTokensOpt, 0, 0,
-				"NONE", time.Since(startTime), string(bodyBytes), string(optResult.Payload), `{"error":"fingerprint_loop","tool":"`+fpTool+`","count":`+fpCount+`}`,
+				"NONE", time.Since(startTime), string(bodyBytes), string(optResult.Payload), `{"error":"fingerprint_loop_hint","tool":"`+fpTool+`","count":`+fpCount+`}`,
 				0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog,
 				toolCallsStr, keyConfig.LimitExceeded, false,
 				turnCount, convSignature)
@@ -646,6 +661,146 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 		log.Printf("All upstream providers failed. Last error: %v, Status: %d", reqErr, status)
 		http.Error(w, "Failed to reach upstream provider", status)
 		return
+	}
+
+	// Intercept tool calls in LLM responses and perform recursive upstream call
+	var finalResponseBytes []byte
+	var finalResponse *http.Response
+	isResponseIntercepted := false
+
+	for {
+		if resp == nil || resp.StatusCode != http.StatusOK {
+			break
+		}
+
+		respBytes, readErr := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if readErr != nil {
+			log.Printf("[ProxyHandler] Error reading upstream response body: %v", readErr)
+			break
+		}
+
+		var chatCompletionsJSON []byte
+		if wantStream {
+			chatCompletionsJSON = reconstructFromSSE(respBytes, reqModel)
+		} else {
+			chatCompletionsJSON = respBytes
+		}
+
+		var respJSON struct {
+			Choices []struct {
+				Message struct {
+					Role      string `json:"role"`
+					Content   string `json:"content"`
+					ToolCalls []struct {
+						ID       string `json:"id"`
+						Type     string `json:"type"`
+						Function struct {
+							Name      string `json:"name"`
+							Arguments string `json:"arguments"`
+						} `json:"function"`
+					} `json:"tool_calls"`
+				} `json:"message"`
+			} `json:"choices"`
+		}
+
+		hasToolCalls := false
+		if err := json.Unmarshal(chatCompletionsJSON, &respJSON); err == nil && len(respJSON.Choices) > 0 {
+			if len(respJSON.Choices[0].Message.ToolCalls) > 0 {
+				hasToolCalls = true
+			}
+		}
+
+		if !hasToolCalls {
+			finalResponseBytes = respBytes
+			finalResponse = resp
+			break
+		}
+
+		allCached := true
+		for _, tc := range respJSON.Choices[0].Message.ToolCalls {
+			_, exists := optiagent.QueryToolCallCache(ctx, rdb, virtualKey, tc.Function.Name, tc.Function.Arguments, semanticTolerance)
+			if !exists {
+				allCached = false
+				break
+			}
+		}
+
+		if !allCached {
+			finalResponseBytes = respBytes
+			finalResponse = resp
+			break
+		}
+
+		log.Printf("[ProxyHandler] TOOL CACHE FULL HIT: Intercepting all tool calls for %s", reqModel)
+
+		var requestBody struct {
+			Messages []optiagent.Message `json:"messages"`
+		}
+		if err := json.Unmarshal(optResult.Payload, &requestBody); err != nil {
+			finalResponseBytes = respBytes
+			finalResponse = resp
+			break
+		}
+
+		var assistantMsg optiagent.Message
+		assistantMsg.Role = "assistant"
+		for _, tc := range respJSON.Choices[0].Message.ToolCalls {
+			assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, struct {
+				ID       string `json:"id"`
+				Type     string `json:"type"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			}{
+				ID: tc.ID,
+				Type: tc.Type,
+				Function: struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				}{
+					Name: tc.Function.Name,
+					Arguments: tc.Function.Arguments,
+				},
+			})
+		}
+		requestBody.Messages = append(requestBody.Messages, assistantMsg)
+
+		for _, tc := range respJSON.Choices[0].Message.ToolCalls {
+			cachedResult, _ := optiagent.QueryToolCallCache(ctx, rdb, virtualKey, tc.Function.Name, tc.Function.Arguments, semanticTolerance)
+			var toolMsg optiagent.Message
+			toolMsg.Role = "tool"
+			toolMsg.ToolCallID = tc.ID
+			toolMsg.Name = tc.Function.Name
+			toolMsg.Content = cachedResult
+			requestBody.Messages = append(requestBody.Messages, toolMsg)
+		}
+
+		var payloadMap map[string]interface{}
+		if err := json.Unmarshal(optResult.Payload, &payloadMap); err == nil {
+			payloadMap["messages"] = requestBody.Messages
+			newPayload, _ := json.Marshal(payloadMap)
+			optResult.Payload = newPayload
+		}
+
+		log.Printf("[ProxyHandler] Short-circuiting tool calls, recursively invoking upstream with cached tool outputs...")
+		resp, reqErr = executeRequest(usedProvider, realKey)
+		if reqErr != nil || (resp != nil && resp.StatusCode >= 400) {
+			if resp != nil {
+				resp.Body.Close()
+			}
+			http.Error(w, "Failed to reach upstream provider during loop resolution", http.StatusBadGateway)
+			return
+		}
+		isResponseIntercepted = true
+	}
+
+	if isResponseIntercepted {
+		resp = finalResponse
+		resp.Body = io.NopCloser(bytes.NewBuffer(finalResponseBytes))
+	} else if resp != nil {
+		resp.Body = io.NopCloser(bytes.NewBuffer(finalResponseBytes))
 	}
 	defer resp.Body.Close()
 
@@ -1379,4 +1534,33 @@ func maskVirtualKey(authHeader string) string {
 		return vk[:min(len(vk), 4)] + "â€¦"
 	}
 	return vk[:8] + "â€¦"
+}
+
+// makeSelfCorrectionResponse constructs a mock Chat Completions response containing the self-correction hint.
+func makeSelfCorrectionResponse(toolName string, model string) []byte {
+	var msgContent string
+	if toolName != "" {
+		msgContent = "Attention : Vous venez de répéter l'outil " + toolName + " avec les mêmes arguments. Veuillez vérifier vos actions précédentes ou changer de stratégie pour éviter une boucle infinie."
+	} else {
+		msgContent = "Attention : Une boucle répétitive a été détectée dans vos requêtes. Veuillez vérifier vos actions précédentes ou changer de stratégie pour éviter une boucle infinie."
+	}
+
+	respObj := map[string]interface{}{
+		"id":      "chatcmpl-selfcorrect",
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   model,
+		"choices": []map[string]interface{}{
+			{
+				"index": 0,
+				"message": map[string]string{
+					"role":    "assistant",
+					"content": msgContent,
+				},
+				"finish_reason": "stop",
+			},
+		},
+	}
+	bytes, _ := json.Marshal(respObj)
+	return bytes
 }

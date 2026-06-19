@@ -38,6 +38,7 @@ export type FirewallApiKey = {
   allowedTools?: string | null;
   blockUnknownTools?: boolean;
   redactPII?: boolean;
+  toolTtls?: string | null;
 };
 
 type FirewallForm = {
@@ -50,6 +51,7 @@ type FirewallForm = {
   allowedTools: string;
   blockUnknownTools: boolean;
   redactPII: boolean;
+  toolTtls: string;
 };
 
 export type FirewallModalProps = {
@@ -72,6 +74,16 @@ export default function FirewallModal({ apiKey, onClose, onSave }: FirewallModal
     allowedTools: apiKey.allowedTools ?? "",
     blockUnknownTools: apiKey.blockUnknownTools ?? false,
     redactPII: apiKey.redactPII ?? false,
+    toolTtls: apiKey.toolTtls ?? "{}",
+  });
+
+  const [toolTtlsList, setToolTtlsList] = useState<Array<{ tool: string; ttl: number }>>(() => {
+    try {
+      const parsed = apiKey.toolTtls ? JSON.parse(apiKey.toolTtls) : {};
+      return Object.entries(parsed).map(([tool, ttl]) => ({ tool, ttl: Number(ttl) }));
+    } catch {
+      return [];
+    }
   });
 
   const [discoveredTools, setDiscoveredTools] = useState<string[]>([]);
@@ -110,6 +122,15 @@ export default function FirewallModal({ apiKey, onClose, onSave }: FirewallModal
   // because empty <input type="number"> gives us "" not null.
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const toolTtlsObj: Record<string, number> = {};
+    toolTtlsList.forEach((item) => {
+      const name = item.tool.trim();
+      if (name) {
+        toolTtlsObj[name] = Math.max(0, Number(item.ttl));
+      }
+    });
+
     const cleaned: FirewallForm = {
       ...form,
       sessionTokenLimit:
@@ -123,6 +144,7 @@ export default function FirewallModal({ apiKey, onClose, onSave }: FirewallModal
         .map((s) => s.trim())
         .filter(Boolean)
         .join(","),
+      toolTtls: JSON.stringify(toolTtlsObj),
     };
     await onSave(cleaned);
   };
@@ -205,6 +227,72 @@ export default function FirewallModal({ apiKey, onClose, onSave }: FirewallModal
               Disable a stage to skip it on every request. Useful for benchmarking
               or to force upstream calls for a specific key.
             </p>
+          </fieldset>
+
+          {/* Tool Cache TTLs (Granular TTLs) */}
+          <fieldset className="border border-white/10 rounded-xl p-4 bg-[#141414]/30">
+            <legend className="text-xs font-bold text-gray-400 uppercase tracking-wide px-2 flex items-center gap-2">
+              <Database className="w-3.5 h-3.5 text-cyan-400" /> Tool-Specific Cache TTLs
+            </legend>
+            <p className="text-[11px] text-gray-500 mt-1 mb-4">
+              Override the global cache age limit per tool. Setting a TTL of 0s disables caching for that tool.
+            </p>
+            <div className="space-y-2.5">
+              {toolTtlsList.map((item, idx) => (
+                <div key={idx} className="flex items-center gap-3 bg-black/20 p-2 rounded-lg border border-white/5">
+                  <div className="flex-1">
+                    <input
+                      type="text"
+                      value={item.tool}
+                      onChange={(e) => {
+                        const newList = [...toolTtlsList];
+                        newList[idx].tool = e.target.value;
+                        setToolTtlsList(newList);
+                      }}
+                      placeholder="e.g. web_search"
+                      className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-sm font-mono text-white focus:border-cyan-500 outline-none"
+                    />
+                  </div>
+                  <div className="w-32 flex items-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      value={item.ttl}
+                      onChange={(e) => {
+                        const newList = [...toolTtlsList];
+                        newList[idx].ttl = e.target.value === "" ? 0 : Number(e.target.value);
+                        setToolTtlsList(newList);
+                      }}
+                      placeholder="60"
+                      className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-sm font-mono text-white focus:border-cyan-500 outline-none"
+                    />
+                    <span className="text-xs text-gray-500 font-mono">s</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setToolTtlsList(toolTtlsList.filter((_, i) => i !== idx));
+                    }}
+                    className="p-1.5 text-gray-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
+                    title="Remove"
+                  >
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+              ))}
+              {toolTtlsList.length === 0 && (
+                <p className="text-xs text-gray-600 italic py-1 text-center">
+                  No tool TTL overrides configured. Global cache defaults apply.
+                </p>
+              )}
+              <button
+                type="button"
+                onClick={() => setToolTtlsList([...toolTtlsList, { tool: "", ttl: 60 }])}
+                className="w-full py-2 border border-dashed border-white/10 hover:border-cyan-500/50 hover:bg-cyan-500/[0.02] text-xs font-semibold text-gray-400 hover:text-cyan-400 rounded-lg transition-all flex items-center justify-center gap-1.5 mt-2"
+              >
+                + Add Tool TTL Override
+              </button>
+            </div>
           </fieldset>
 
           {/* Kill switch + soft loop */}

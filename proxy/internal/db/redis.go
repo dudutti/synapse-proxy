@@ -1,4 +1,4 @@
-﻿package db
+package db
 
 import (
 	"context"
@@ -30,7 +30,7 @@ func GetRedis() *redis.Client {
 	return rdbClient
 }
 
-// InitRedisIndex creates the Vector Similarity Search index required by L2 Cache
+// InitRedisIndex creates the Vector Similarity Search index required by L2 Cache and Tool Cache
 func InitRedisIndex() {
 	ctx := context.Background()
 	
@@ -42,5 +42,12 @@ func InitRedisIndex() {
 	
 	if err != nil && !strings.Contains(err.Error(), "Index already exists") {
 		log.Printf("Redis VSS Index creation issue (safe to ignore if not redis-stack): %v", err)
+	}
+
+	// Create tool VSS index
+	rdbClient.Do(ctx, "FT.DROPINDEX", "idx:toolcache").Err()
+	errTool := rdbClient.Do(ctx, "FT.CREATE", "idx:toolcache", "ON", "HASH", "PREFIX", "1", "synapse:toolcache:", "SCHEMA", "vk", "TAG", "tool", "TAG", "vector", "VECTOR", "FLAT", "6", "TYPE", "FLOAT32", "DIM", "384", "DISTANCE_METRIC", "COSINE", "arguments", "TEXT", "response", "TEXT").Err()
+	if errTool != nil && !strings.Contains(errTool.Error(), "Index already exists") {
+		log.Printf("Redis Tool VSS Index creation issue: %v", errTool)
 	}
 }

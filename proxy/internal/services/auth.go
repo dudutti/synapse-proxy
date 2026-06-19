@@ -36,6 +36,7 @@ type VirtualKeyConfig struct {
 	AllowedTools         string
 	BlockUnknownTools    bool
 	RedactPII            bool
+	ToolTtls             string
 	
 	// Tier Constraints
 	LimitExceeded      bool
@@ -111,6 +112,7 @@ func ValidateVirtualKey(ctx context.Context, authHeader string) (*VirtualKeyConf
 		AllowedTools:         val["allowed_tools"],
 		BlockUnknownTools:    val["block_unknown_tools"] == "true",
 		RedactPII:            val["redact_pii"] == "true",
+		ToolTtls:             val["tool_ttls"],
 		LimitExceeded:      val["limit_exceeded"] == "true",
 	}
 

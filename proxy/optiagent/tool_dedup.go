@@ -1,10 +1,17 @@
-﻿package optiagent
+package optiagent
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
+	"log"
+	"net/http"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -194,4 +201,240 @@ func StoreToolDedupBody(ctx context.Context, rdb *redis.Client, virtualKey, file
 	h := sha256.Sum256([]byte(filePath))
 	key := "synapse:tools:" + virtualKey + ":" + hex.EncodeToString(h[:])
 	_ = rdb.Set(ctx, key, body, ttl).Err()
+}
+
+// Message is a representation of an OpenAI-style chat completion message.
+type Message struct {
+	Role       string      `json:"role"`
+	Content    interface{} `json:"content"`
+	Name       string      `json:"name,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	ToolCalls  []struct {
+		ID       string `json:"id"`
+		Type     string `json:"type"`
+		Function struct {
+			Name      string `json:"name"`
+			Arguments string `json:"arguments"`
+		} `json:"function"`
+	} `json:"tool_calls,omitempty"`
+}
+
+// StoreCompletedToolCalls parses the request payload and stores any completed tool responses
+// in the Redis tool cache index.
+func StoreCompletedToolCalls(ctx context.Context, rdb *redis.Client, virtualKey string, payload []byte) {
+	if rdb == nil || len(payload) == 0 {
+		return
+	}
+
+	var body struct {
+		Messages []Message `json:"messages"`
+	}
+	if err := json.Unmarshal(payload, &body); err != nil || len(body.Messages) == 0 {
+		return
+	}
+
+	// We iterate through messages. For each message with role: tool (or function),
+	// we search backward for the assistant message that requested it.
+	for i, msg := range body.Messages {
+		if msg.Role == "tool" || msg.Role == "function" {
+			var outputStr string
+			if str, ok := msg.Content.(string); ok {
+				outputStr = str
+			} else if bytes, ok := msg.Content.([]byte); ok {
+				outputStr = string(bytes)
+			} else {
+				// Try marshalling non-string content (e.g. JSON array/object)
+				if b, err := json.Marshal(msg.Content); err == nil {
+					outputStr = string(b)
+				}
+			}
+
+			if outputStr == "" {
+				continue
+			}
+
+			// Find matching tool call in previous messages
+			var matchedName, matchedArgs string
+			matched := false
+
+			// Match by ID if tool_call_id is present
+			if msg.ToolCallID != "" {
+				for j := i - 1; j >= 0; j-- {
+					prev := body.Messages[j]
+					if prev.Role == "assistant" && len(prev.ToolCalls) > 0 {
+						for _, tc := range prev.ToolCalls {
+							if tc.ID == msg.ToolCallID {
+								matchedName = tc.Function.Name
+								matchedArgs = tc.Function.Arguments
+								matched = true
+								break
+							}
+						}
+					}
+					if matched {
+						break
+					}
+				}
+			}
+
+			// Fallback: match by Name if tool_call_id didn't match or is missing
+			if !matched && msg.Name != "" {
+				for j := i - 1; j >= 0; j-- {
+					prev := body.Messages[j]
+					if prev.Role == "assistant" && len(prev.ToolCalls) > 0 {
+						for _, tc := range prev.ToolCalls {
+							if tc.Function.Name == msg.Name {
+								matchedName = tc.Function.Name
+								matchedArgs = tc.Function.Arguments
+								matched = true
+								break
+							}
+						}
+					}
+					if matched {
+						break
+					}
+				}
+			}
+
+			if matched && matchedName != "" && matchedArgs != "" {
+				StoreToolCallCache(ctx, rdb, virtualKey, matchedName, matchedArgs, outputStr)
+			}
+		}
+	}
+}
+
+// StoreToolCallCache calculates embeddings for the tool arguments and saves the tool output to Redis.
+func StoreToolCallCache(ctx context.Context, rdb *redis.Client, virtualKey string, toolName string, arguments string, output string) {
+	if output == "" || rdb == nil {
+		return
+	}
+
+	h := sha256.Sum256([]byte(arguments))
+	exactKey := "synapse:toolcache:exact:" + virtualKey + ":" + toolName + ":" + hex.EncodeToString(h[:])
+	_ = rdb.Set(ctx, exactKey, []byte(output), 24*time.Hour).Err()
+
+	onnxUrl := os.Getenv("ONNX_API_URL")
+	if onnxUrl == "" {
+		return
+	}
+
+	// Retrieve embedding vector of arguments
+	reqBody, _ := json.Marshal(map[string]string{"text": arguments})
+	resp, err := http.Post(onnxUrl, "application/json", bytes.NewBuffer(reqBody))
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+
+	var onnxRes struct {
+		Vector []float32 `json:"vector"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&onnxRes) != nil || len(onnxRes.Vector) == 0 {
+		return
+	}
+
+	key := "synapse:toolcache:" + virtualKey + ":" + toolName + ":" + hex.EncodeToString(h[:])
+
+	// Convert float32 vector to byte array for Redis
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, binary.LittleEndian, onnxRes.Vector); err != nil {
+		return
+	}
+	vectorBytes := buf.Bytes()
+
+	redisData := map[string]interface{}{
+		"vk":        virtualKey,
+		"tool":      toolName,
+		"vector":    vectorBytes,
+		"arguments": arguments,
+		"response":  output,
+	}
+
+	_ = rdb.HMSet(ctx, key, redisData).Err()
+	_ = rdb.Expire(ctx, key, 24*time.Hour).Err()
+}
+
+// QueryToolCallCache checks exact match and semantic VSS match for a tool's arguments.
+func QueryToolCallCache(ctx context.Context, rdb *redis.Client, virtualKey string, toolName string, arguments string, semanticTolerance float64) (string, bool) {
+	if rdb == nil {
+		return "", false
+	}
+
+	// 1. Exact match first
+	h := sha256.Sum256([]byte(arguments))
+	exactKey := "synapse:toolcache:exact:" + virtualKey + ":" + toolName + ":" + hex.EncodeToString(h[:])
+	exactVal, err := rdb.Get(ctx, exactKey).Result()
+	if err == nil && exactVal != "" {
+		return exactVal, true
+	}
+
+	// Check exact match on the VSS key format as fallback
+	vssExactKey := "synapse:toolcache:" + virtualKey + ":" + toolName + ":" + hex.EncodeToString(h[:])
+	if vssVal, err := rdb.HGet(ctx, vssExactKey, "response").Result(); err == nil && vssVal != "" {
+		return vssVal, true
+	}
+
+	// 2. Semantic VSS match
+	onnxUrl := os.Getenv("ONNX_API_URL")
+	if onnxUrl == "" {
+		return "", false
+	}
+
+	reqBody, _ := json.Marshal(map[string]string{"text": arguments})
+	resp, err := http.Post(onnxUrl, "application/json", bytes.NewBuffer(reqBody))
+	if err != nil {
+		return "", false
+	}
+	defer resp.Body.Close()
+
+	var onnxRes struct {
+		Vector []float32 `json:"vector"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&onnxRes) != nil || len(onnxRes.Vector) == 0 {
+		return "", false
+	}
+
+	buf := new(bytes.Buffer)
+	if err := binary.Write(buf, binary.LittleEndian, onnxRes.Vector); err != nil {
+		return "", false
+	}
+	vectorBytes := buf.Bytes()
+
+	escapedVK := escapeRedisTag(virtualKey)
+	escapedTool := escapeRedisTag(toolName)
+	query := "(@vk:{" + escapedVK + "} @tool:{" + escapedTool + "})=>[KNN 1 @vector $query_vec AS score]"
+	
+	res, err := rdb.Do(ctx, "FT.SEARCH", "idx:toolcache", query, "PARAMS", "2", "query_vec", vectorBytes, "RETURN", "2", "score", "response", "DIALECT", "2").Result()
+	if err != nil {
+		return "", false
+	}
+
+	resArr, ok := res.([]interface{})
+	if !ok || len(resArr) <= 2 {
+		return "", false
+	}
+
+	fields, ok := resArr[2].([]interface{})
+	if !ok {
+		return "", false
+	}
+
+	var score float64
+	var hitResponse string
+	for i := 0; i < len(fields); i += 2 {
+		k := fields[i].(string)
+		if k == "score" {
+			score, _ = strconv.ParseFloat(fields[i+1].(string), 64)
+		} else if k == "response" {
+			hitResponse = fields[i+1].(string)
+		}
+	}
+
+	if score < semanticTolerance && hitResponse != "" {
+		log.Printf("[SemanticToolDedup] Semantic hit for tool %s: input %s matched cached query with cosine distance %f", toolName, arguments, score)
+		return hitResponse, true
+	}
+
+	return "", false
 }

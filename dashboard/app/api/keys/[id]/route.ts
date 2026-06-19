@@ -77,6 +77,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
     if (body.allowedTools !== undefined) dataToUpdate.allowedTools = body.allowedTools;
     if (body.blockUnknownTools !== undefined) dataToUpdate.blockUnknownTools = !!body.blockUnknownTools;
     if (body.redactPII !== undefined) dataToUpdate.redactPII = !!body.redactPII;
+    if (body.toolTtls !== undefined) dataToUpdate.toolTtls = body.toolTtls;
 
     const updatedKey = await prisma.apiKey.update({
       where: { id: keyId },
@@ -107,6 +108,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
       if (body.allowedTools !== undefined) redisData.allowed_tools = updatedKey.allowedTools || "";
       if (body.blockUnknownTools !== undefined) redisData.block_unknown_tools = updatedKey.blockUnknownTools ? "true" : "false";
       if (body.redactPII !== undefined) redisData.redact_pii = updatedKey.redactPII ? "true" : "false";
+      if (body.toolTtls !== undefined) redisData.tool_ttls = updatedKey.toolTtls || "{}";
 
       const redisOp = redisClient.hSet(`synapse:keys:${updatedKey.virtualKey}`, redisData);
       const timeout = new Promise((_, reject) =>

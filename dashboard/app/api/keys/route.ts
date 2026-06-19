@@ -61,7 +61,7 @@ export async function GET(req: Request) {
 
     const keys = await prisma.apiKey.findMany({
     where: { userId: user.id },
-    select: { id: true, virtualKey: true, provider: true, monthlyBudget: true, currentUsage: true, createdAt: true, benchmarkMode: true, semanticTolerance: true, cacheTtl: true, defaultModel: true, isolateCacheByUser: true, zeroLog: true, enableL1: true, enableL2: true, enableL3: true, killSwitch: true, sessionTokenLimit: true, allowedTools: true, blockUnknownTools: true, redactPII: true }
+    select: { id: true, virtualKey: true, provider: true, monthlyBudget: true, currentUsage: true, createdAt: true, benchmarkMode: true, semanticTolerance: true, cacheTtl: true, defaultModel: true, isolateCacheByUser: true, zeroLog: true, enableL1: true, enableL2: true, enableL3: true, killSwitch: true, sessionTokenLimit: true, allowedTools: true, blockUnknownTools: true, redactPII: true, toolTtls: true }
   });
 
   return NextResponse.json(keys);
@@ -77,7 +77,7 @@ export async function POST(req: Request) {
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { provider, realKey, fallbackProvider, fallbackKey, fallbackModel, defaultModel, isolateCacheByUser, zeroLog, enableL1, enableL2, enableL3, killSwitch, sessionTokenLimit, allowedTools, blockUnknownTools, redactPII } = await req.json();
+    const { provider, realKey, fallbackProvider, fallbackKey, fallbackModel, defaultModel, isolateCacheByUser, zeroLog, enableL1, enableL2, enableL3, killSwitch, sessionTokenLimit, allowedTools, blockUnknownTools, redactPII, toolTtls } = await req.json();
 
     if (!provider || !realKey) {
       return NextResponse.json({ error: "Provider and Real Key are required" }, { status: 400 });
@@ -115,6 +115,7 @@ export async function POST(req: Request) {
         allowedTools: allowedTools || null,
         blockUnknownTools: !!blockUnknownTools,
         redactPII: !!redactPII,
+        toolTtls: toolTtls || "{}",
       }
     });
 
@@ -156,6 +157,7 @@ export async function POST(req: Request) {
           block_unknown_tools: blockUnknownTools ? "true" : "false",
           redact_pii: redactPII ? "true" : "false",
           tier: user.tier || "FREE",
+          tool_ttls: toolTtls || "{}",
         };
         // Check if limits exceeded based on tier
         let limitExceeded = false;

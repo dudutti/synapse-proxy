@@ -25,7 +25,8 @@ While it actively protects your infrastructure, Synapse Proxy quietly optimizes 
 
 When building autonomous agents, the biggest risk is infinite loops and runaway costs. Synapse Proxy introduces a robust Firewall specifically designed for AI agents:
 
-- **Loop Kill Switch:** Detects when an agent is drifting into an infinite reasoning loop. It immediately trips the circuit breaker, returning a clean HTTP 400 to halt the agent before costs spiral.
+- **Loop Kill Switch & Self-Correction:** Detects when an agent is drifting into an infinite loop (repeating identical request payloads). It intercepts the execution and returns a mock OpenAI-compatible chat completion response (`HTTP 200`) containing a descriptive self-correction warning to guide the agent to change strategy.
+- **Granular Tool Cache TTLs:** Configure custom cache durations per tool name (including setting TTL to 0s to disable caching for specific stateful tools) via the Firewall Dashboard.
 - **PII Redaction:** Native regex-based masking of sensitive data (Emails, API Keys) before the prompt ever reaches the upstream provider.
 - **Tool Allowlisting:** Lock down your agent's capabilities. If an agent hallucinates a tool or tries to invoke an unauthorized function, the Proxy actively blocks the request.
 - **Session Circuit Breaker:** Define strict prompt-token limits per session to cap expenditures on a per-task basis.
@@ -60,6 +61,7 @@ Though security and observability take center stage, Synapse Proxy features a st
   - **L1 Exact Match:** Ultra-fast SHA-256 match for scripts retrying the exact same query.
   - **L2 Semantic Match:** ONNX-based vector search (MiniLM) for conceptually identical queries. Auto-disabled on multi-turn conversations to prevent state corruption.
   - **L3 Prefix-Preserving Compression:** Intelligently prunes stale `<thought>` blocks, truncates oversized tool outputs, and condenses older history. It maintains a byte-exact prefix so the upstream provider's native prompt cache remains 99% effective.
+  - **Semantic Tool Deduplication:** Intercepts LLM tool calls and retrieves cached outputs from similar prior invocations (exact matching + ONNX embeddings with cosine similarity >90% on VSS), recursively calling the LLM upstream to bypass client-side tool execution.
 
 > 📖 **Deep Dive:** Learn the magic behind our Cache-Preserving L3 and ONNX L2 search in the [Caching Architecture](docs/caching_architecture.md) documentation.
 
@@ -116,8 +118,9 @@ The repo ships with a complete Next.js dashboard under `./dashboard` that turns 
 
 ### What's new (post-launch)
 
-- **Agent Firewall as a first-class concept** — every virtual key has 9 firewall fields (`enableL1/2/3`, `killSwitch`, `sessionTokenLimit`, `allowedTools`, `blockUnknownTools`, `redactPII`, `fingerprintLoopDetect`). Persisted in Postgres, mirrored to Redis on every change so the proxy's hot path never has to hit the DB.
-- **Tool-call fingerprinting** complements the loop kill switch. Where the kill switch trips after 3 identical *bodies*, the fingerprint trips after 4 identical *(tool, args)* pairs within 30s AND the cache check misses (exempting read-only tools which are cached indefinitely). The kill switch returns `HTTP 400` (the agent is dead); the fingerprint returns `HTTP 429 + Retry-After: 60` (the agent should back off). Most agent frameworks (Claude Code, Cursor, Continue) handle 429 natively as "slow down".
+- **Agent Firewall as a first-class concept** — every virtual key has firewall configurations (L1/L2/L3 cache toggles, kill switch, session token limit, tool whitelist, PII redaction, fingerprint loop detection, custom tool TTLs). Configured in the dashboard and synced to Redis.
+- **Self-Correction loop warnings** — replaces traditional hard loops (HTTP 400/429 blocks) with mock HTTP 200 completion messages warning the agent about the repeated action, allowing the agent to self-correct within the prompt history.
+- **Semantic Tool Deduplication** — intercepting tool calls in LLM responses and resolving them against cached tool executions using ONNX embeddings and Redis VSS, triggering recursive upstream calls to bypass client-side execution loops.
 - **Multiturn session detection** — the dashboard groups requests by conversation fingerprint instead of per-request buckets, so a 4-turn debugging session shows up as one row with `Tour 1/2/3/4` badges, not 4 separate rows.
 - **MCP server in HTTP mode** — runs as a long-lived process behind the same Caddy reverse proxy, exposing 14 tools (4 free + 10 paid) to any MCP-compatible IDE.
 

@@ -79,6 +79,7 @@ model ApiKey {
   allowedTools       String?        @db.Text
   blockUnknownTools  Boolean        @default(false)
   redactPII          Boolean        @default(false)
+  toolTtls           String         @default("{}")
 
   createdAt          DateTime       @default(now())
   requestLogs        RequestLog[]

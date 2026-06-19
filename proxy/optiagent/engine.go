@@ -101,7 +101,7 @@ func extractTextForEmbedding(payload []byte) (string, bool, bool) {
 	return string(payload), false, false
 }
 
-func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, semanticTolerance float64, virtualKey string, isolateCache bool, forceDisableL2 bool, enableL1 bool, enableL2 bool, enableL3 bool, limitExceeded bool, cacheTtl int) (OptimizationResult, error) {
+func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, semanticTolerance float64, virtualKey string, isolateCache bool, forceDisableL2 bool, enableL1 bool, enableL2 bool, enableL3 bool, limitExceeded bool, cacheTtl int, toolTtls string) (OptimizationResult, error) {
 	if isolateCache {
 		var payloadMap map[string]interface{}
 		if err := json.Unmarshal(payload, &payloadMap); err == nil {
@@ -135,7 +135,7 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 	if enableL1 {
 		cachedResp, err := rdb.Get(ctx, l1Key).Bytes()
 		if err == nil && len(cachedResp) > 0 {
-			if ShouldReuseCache(ctx, rdb, payload, l1Key, cacheTtl, CacheReplayMaxAgeSecs) {
+			if ShouldReuseCache(ctx, rdb, payload, l1Key, cacheTtl, toolTtls) {
 				hitResponse := cachedResp
 				if limitExceeded {
 					hitResponse = nil // Do not return response to upstream, force proxy to hit provider
@@ -149,7 +149,7 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 					HitResponse:     hitResponse,
 				}, nil
 			} else {
-				log.Printf("[optiagent] L1 cache hit for stateful tool call is stale (age > %ds), treating as miss", CacheReplayMaxAgeSecs)
+				log.Printf("[optiagent] L1 cache hit for stateful tool call is stale or disabled, treating as miss")
 			}
 		}
 	}
@@ -200,7 +200,7 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 							// If Cosine Distance < semanticTolerance (e.g. 0.15 = Similarity > 85%)
 							if score < semanticTolerance && hitResponse != "" {
 								docKey, _ := resArr[1].(string)
-								if ShouldReuseCache(ctx, rdb, payload, docKey, cacheTtl, CacheReplayMaxAgeSecs) {
+								if ShouldReuseCache(ctx, rdb, payload, docKey, cacheTtl, toolTtls) {
 									var hitBytes []byte
 									if !limitExceeded {
 										hitBytes = []byte(hitResponse)
@@ -213,9 +213,10 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 										PromptTokensOrig: origTokens,
 										PromptTokensOpt:  0,
 										HitResponse:      hitBytes,
+										
 									}, nil
 								} else {
-									log.Printf("[optiagent] L2 cache hit for stateful tool call is stale (age > %ds), treating as miss", CacheReplayMaxAgeSecs)
+									log.Printf("[optiagent] L2 cache hit for stateful tool call is stale or disabled, treating as miss")
 								}
 							}
 						}

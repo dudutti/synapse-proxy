@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"regexp"
 	"strconv"
 	"strings"
@@ -215,39 +216,57 @@ func CheckToolFingerprint(ctx context.Context, rdb *redis.Client, virtualKey str
 }
 
 // ShouldReuseCache determines if a cache hit should be re-served.
-// Option 3 strategy:
+// Evaluates tool-specific TTLs:
 //   - If the request contains no tool calls, return true (always allow).
-//   - If the request contains only read-only tool calls (e.g., todo, think, plan), return true (whitelist).
-//   - If the request contains any stateful/mutation tool call (e.g., write_file, shell_exec),
-//     return true only if the cache entry is fresh (age <= maxAgeSecs, default 60s).
-func ShouldReuseCache(ctx context.Context, rdb *redis.Client, payload []byte, cacheKey string, cacheTtl int, maxAgeSecs int) bool {
+//   - If tool-specific TTL overrides are defined in toolTtlsStr, check them. A TTL of 0s disables caching for that tool.
+//   - Fallback: read-only tool calls (e.g., todo, think, plan) have no limit (infinity), stateful/mutation tool calls have a default limit of 60s.
+func ShouldReuseCache(ctx context.Context, rdb *redis.Client, payload []byte, cacheKey string, cacheTtl int, toolTtlsStr string) bool {
 	calls := ExtractAllToolCalls(payload)
 	if len(calls) == 0 {
 		return true
 	}
 
-	allReadOnly := true
+	var ttls map[string]int
+	if toolTtlsStr != "" {
+		_ = json.Unmarshal([]byte(toolTtlsStr), &ttls)
+	}
+
+	minAgeLimit := -1 // -1 means infinity / no limit
 	for _, c := range calls {
-		if !isReadOnlyTool(c.ToolName) {
-			allReadOnly = false
-			break
+		name := c.ToolName
+		if val, exists := ttls[name]; exists {
+			if val == 0 {
+				return false // Caching disabled for this tool
+			}
+			if minAgeLimit == -1 || val < minAgeLimit {
+				minAgeLimit = val
+			}
+		} else {
+			// Fallback to default rules
+			if isReadOnlyTool(name) {
+				// Whitelisted read-only tool, no age limit
+			} else {
+				// Stateful tool defaults to 60s
+				if minAgeLimit == -1 || 60 < minAgeLimit {
+					minAgeLimit = 60
+				}
+			}
 		}
 	}
 
-	if allReadOnly {
+	if minAgeLimit == -1 {
 		return true
 	}
 
-	// Stateful/mutation tool call present. Check age via Redis TTL.
+	// Check age via Redis TTL.
 	ttlRemaining, err := rdb.TTL(ctx, cacheKey).Result()
 	if err != nil || ttlRemaining <= 0 {
-		// If we can't get the TTL or it expired/has no TTL, do not reuse
 		return false
 	}
 
 	totalTtl := time.Duration(cacheTtl) * time.Second
 	age := totalTtl - ttlRemaining
-	if age > time.Duration(maxAgeSecs)*time.Second {
+	if age > time.Duration(minAgeLimit)*time.Second {
 		return false
 	}
 

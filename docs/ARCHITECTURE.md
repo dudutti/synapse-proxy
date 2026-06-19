@@ -30,7 +30,7 @@ graph TB
         OpenAI["OpenAI / Anthropic / MiniMax / any OpenAI-compatible"]
     end
 
-    subgraph SaaS["Hosted dashboard (closed source)"]
+    subgraph SaaS["Hosted dashboard (Next.js - Open Source)"]
         Dashboard["Next.js 14 + Prisma - synapse-proxy.com"]
     end
 
@@ -98,6 +98,7 @@ The request flows through L0 â†’ L1 â†’ L2 â†’ L3. Each layer can
 - `GET` returns the cached body in <2ms
 - TTL: per-key `cache_ttl` (default 86400s = 24h)
 - Hit tagged `cacheLevel=L1`, no upstream call
+- **TTL Validation**: Prior to returning a hit, `optiagent/engine.go` calls `ShouldReuseCache` to evaluate the cache entry's age against custom tool-specific TTL configurations (configured in the dashboard per key, stored as JSON in Redis `tool_ttls` field). A TTL of `0` disables caching for that tool name. If no custom TTL is configured, it falls back to default rules: infinite lifespan for read-only tools, and a maximum age of `60` seconds for stateful tools.
 
 #### 2.2.3 L2 â€” Semantic vector search
 
@@ -110,6 +111,7 @@ The request flows through L0 â†’ L1 â†’ L2 â†’ L3. Each layer can
 - The Redis VSS index is tagged by `(vk, user?)`, so per-tenant isolation is automatic
 - **Auto-disabled** when the request looks like part of a multi-turn conversation (`nonSystemCount > 1`) or contains an image. Two consecutive agent turns have near-identical embeddings â€” returning a cached response from a *different* turn would corrupt the conversation state
 - Hit tagged `cacheLevel=L2`
+- **TTL Validation**: Like L1, the proxy validates the hit response age against granular tool TTL rules using `ShouldReuseCache` before returning the L2 match.
 
 The Redis index is created at proxy startup if it does not exist:
 
@@ -143,6 +145,15 @@ L3 rules (in order, applied to non-recent assistant messages only):
 5. **Compaction hint** (`compaction_hint.go`): prepend `(Earlier tool results in this transcript may be truncated.)` to the system prompt so the LLM is not surprised.
 
 The compressed payload is only used if it actually shrinks in **both bytes and tokens**. Otherwise the original is sent untouched (no re-encoding inflation).
+
+#### 2.2.5 Semantic Tool Deduplication
+
+`optiagent/tool_dedup.go`, `handlers/proxy.go`.
+
+This mechanism intercepts tool execution requests from the agent and bypasses client-side tool runs if cached results exist:
+- **Cache Storage**: The proxy captures completed tool outputs from incoming request payloads (turns where `role` is `tool` or `function` matching preceding assistant `tool_calls` by ID) and persists them in the Redis `idx:toolcache` search index along with an ONNX-computed embedding of their arguments.
+- **Cache Retrieval**: When the LLM outputs a response containing tool calls, the proxy intercepts it before returning it to the client. It queries `idx:toolcache` using exact matching on the arguments and a VSS search (cosine similarity >90%).
+- **Recursive Resolution**: If cached tool responses are found for all tool calls in the response, the proxy appends the cached results to the message sequence and recursively invokes the upstream LLM. It repeats this resolution loop until the LLM returns a final text completion, transparently bypassing client-side tool execution.
 
 ### 2.3 Fallback routing
 
@@ -228,9 +239,9 @@ The judge parses the response and writes a `BenchmarkLog` row with:
 
 If the judge call fails (network error, malformed JSON, etc.), the score falls back to **95** with `feedback = "Fallback mocked score"`, so a benchmark row is still recorded.
 
-## 4. The hosted dashboard
+## 4. The dashboard
 
-Closed-source SaaS at [synapse-proxy.com](https://synapse-proxy.com). Not in this repository. The data it consumes is the data the proxy persists.
+Located in `./dashboard` in this repository. The dashboard is a Next.js application that provides the visual control plane and analytics portal for the proxy gateway. It reads and writes the Postgres database and mirrors configurations to Redis in real time.
 
 ### 4.1 Pages
 

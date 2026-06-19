@@ -63,6 +63,8 @@ interface ApiKey {
 
   redactPII?: boolean;
 
+  toolTtls?: string;
+
 }
 
 export default function SettingsPage() {
@@ -552,6 +554,7 @@ export default function SettingsPage() {
     allowedTools: string;
     blockUnknownTools: boolean;
     redactPII: boolean;
+    toolTtls: string;
   }) => {
     if (!showFirewallModal) return;
     const tId = toast.loading("Saving firewall rules...");

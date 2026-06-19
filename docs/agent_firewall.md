@@ -6,8 +6,8 @@ the upstream LLM provider. It groups four independent mechanisms:
 
 | Mechanism | Trigger | Response | Default |
 |---|---|---|---|
-| **Loop kill switch** | Same full request body 3× in 60s | HTTP 400 + `Loop detected. Agent drift stopped by Synapse Proxy kill switch.` | OFF per key |
-| **Tool fingerprint (soft loop)** | Same `(tool, args)` 4× in 30s **AND** cache miss on a non-read-only tool | HTTP 429 + `Retry-After: 60` | OFF per key |
+| **Loop kill switch** | Same full request body 3× in 60s | HTTP 200 + Self-Correction Assistant Message Warning | OFF per key |
+| **Tool fingerprint (soft loop)** | Same `(tool, args)` 4× in 30s **AND** cache miss on a non-read-only tool | HTTP 200 + Self-Correction Assistant Message Warning | OFF per key |
 | **Tool filter** | Tool name not in `AllowedTools` while `BlockUnknownTools` is on | HTTP 400 + `Agent Firewall blocked unauthorized tool call: <name>` | OFF per key |
 | **Session token cap** | Cumulative prompt tokens per `session_id` exceeds the configured limit | HTTP 400 + `Agent Firewall: Session token limit exceeded` | OFF per key |
 | **PII redaction** | (always on when enabled) | emails stripped from the request body before upstream | OFF per key |
@@ -62,13 +62,11 @@ even if the counter is at 50.
 
 Independent of the fingerprint: the loop detector in
 `proxy/optiagent/loop_detect.go` hashes the **full request body** and,
-on the 3rd identical hash within 60s, returns HTTP 400 with the body
-`Loop detected. Agent drift stopped by Synapse Proxy kill switch.`
+on the 3rd identical hash within 60s, intercepts the loop and returns a mock
+chat completion message (`HTTP 200`) containing a descriptive self-correction warning.
 
 The kill switch fires *before* the cache check and is unaffected by the
-read-only exemption — a runaway agent that re-emits 50 identical
-`write_file` payloads will be killed even if `write_file` is not in the
-denylist. The kill switch is OFF by default per key (`KillSwitch` in
+read-only exemption. The kill switch is OFF by default per key (`KillSwitch` in
 the Agent Firewall modal).
 
 ### Putting it together: the agent's experience
@@ -90,8 +88,8 @@ Tour 1:  write_file(config.json, "X")  → cache miss  → upstream → cache st
 Tour 2:  write_file(config.json, "X")  → cache hit (<60s) → 200 + cached
 Tour 3:  write_file(config.json, "X")  → cache hit (<60s) → 200 + cached
 Tour 4:  write_file(config.json, "X")  → cache age>60s, count=4, miss
-                                          → 429 + Retry-After: 60
-                                          → agent backs off
+                                          → HTTP 200 + Assistant self-correction warning
+                                          → agent reads warning and changes strategies
 ```
 
 ---
@@ -105,12 +103,28 @@ When the fingerprint is enabled and observes a tuple, the proxy sets:
 | `X-Synapse-Fingerprint-Count` | The current retry count for the worst tuple in the body |
 | `X-Synapse-Fingerprint-Tool` | The function name that tripped |
 
-When the kill switch fires the response is HTTP 400 with no special
-header.
+When the kill switch fires or the soft loop blocks (cache miss + count ≥ 4), the proxy intercepts the execution and returns a mock OpenAI-compatible Chat Completion response (`HTTP 200`) with the assistant warning:
 
-When the soft loop blocks (cache miss + count ≥ 4) the response is HTTP
-429 with `Retry-After: 60` and the JSON body
-`{"error": {"message": "Soft loop detected ...", "tool": ..., "count": ...}}`.
+```json
+{
+  "choices": [
+    {
+      "finish_reason": "stop",
+      "index": 0,
+      "message": {
+        "content": "Attention : Vous venez de répéter l'outil <tool> avec les mêmes arguments. Veuillez vérifier vos actions précédentes ou changer de stratégie pour éviter une boucle infinie.",
+        "role": "assistant"
+      }
+    }
+  ],
+  "created": 1781897465,
+  "id": "chatcmpl-selfcorrect",
+  "model": "MiniMax-M3",
+  "object": "chat.completion"
+}
+```
+
+This injects the warning directly into the agent's chat history, enabling it to auto-correct and try a different task plan without crashing the framework.
 
 ---
 
@@ -140,12 +154,24 @@ dashboard and `/v1/keys/tools?vk=<vk>` for direct operator access.
 
 | Redis field | Dashboard field | Default | Effect when on |
 |---|---|---|---|
-| `kill_switch` | Kill Switch | `false` | Hard 400 on full-body repeat 3× in 60s |
-| `fingerprint_loop_detect` | Soft Loop Detect | `false` | 429 on `(tool,args)` 4× in 30s + cache miss, exempts read-only tools |
+| `kill_switch` | Kill Switch | `false` | Mock HTTP 200 warning on full-body repeat 3× in 60s |
+| `fingerprint_loop_detect` | Soft Loop Detect | `false` | Mock HTTP 200 warning on `(tool,args)` 4× in 30s + cache miss, exempts read-only tools |
 | `block_unknown_tools` | Block Tool Calls | `false` | 400 on tool outside `allowed_tools` |
 | `allowed_tools` | Allowed Tools | `""` | Comma-separated whitelist |
 | `session_token_limit` | Session Token Cap | `0` (off) | 400 on cumulative prompt tokens > limit |
 | `redact_pii` | Redact PII | `false` | Strips email-shaped substrings before upstream |
+| `tool_ttls` | Tool Cache TTLs | `"{}"` | JSON string defining granular cache TTLs per tool name (e.g. `{"write_file": 300, "web_search": 0}`) |
 
 All fields are read on every request via `HGETALL synapse:keys:<vk>`
 and decoded in `proxy/internal/services/auth.go`.
+
+---
+
+## Tool-Specific Cache TTLs
+
+The firewall supports configuring granular cache TTL policies per tool name:
+- **Disabling caching**: Set a TTL of `0` for any tool name (e.g. `{"write_file": 0}`). The proxy will completely skip caching for requests containing this tool call, forcing them upstream.
+- **Custom durations**: Set a TTL in seconds (e.g. `{"web_search": 3600}`) to enforce a specific age limit on cache entries containing this tool call.
+- **Fallback**: If no tool-specific override is found, the proxy defaults to whitelisting read-only tools (infinite cache lifespan) and limiting stateful tools to `60` seconds.
+
+Operators can configure these TTLs per virtual key directly in the Dashboard under **Firewall Modal → Tool Cache TTLs**. Changes are written to Postgres and synced to the `tool_ttls` Redis hash field.

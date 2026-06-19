@@ -25,7 +25,8 @@ Tout en protégeant activement votre infrastructure, Synapse Proxy optimise sile
 
 Lors de la création d'agents autonomes, le risque majeur réside dans les boucles infinies et l'explosion des coûts. Synapse Proxy introduit un Pare-feu (Firewall) robuste, conçu spécifiquement pour les agents IA :
 
-- **Loop Kill Switch :** Détecte lorsqu'un agent dérive dans une boucle de raisonnement infinie. Il déclenche immédiatement un disjoncteur et renvoie une erreur HTTP 400 propre pour stopper l'agent avant que les coûts ne s'envolent.
+- **Loop Kill Switch & Auto-Correction :** Détecte lorsqu'un agent dérive dans une boucle infinie (requêtes identiques répétées). Il intercepte l'exécution et renvoie une réponse simulée compatible avec OpenAI (`HTTP 200`) contenant un avertissement d'auto-correction pour guider l'agent à changer de stratégie.
+- **Configurations Granulaires des TTL de Cache :** Personnalisez la durée de vie du cache par outil (y compris un TTL de 0s pour désactiver le cache pour certains outils stateful) depuis le tableau de bord du Pare-feu.
 - **Rédaction PII (Anonymisation) :** Masquage natif basé sur des expressions régulières pour protéger les données sensibles (E-mails, Clés API) avant même que le prompt n'atteigne le fournisseur LLM.
 - **Liste Blanche d'Outils (Tool Allowlist) :** Verrouillez les capacités de votre agent. Si un agent hallucine un outil ou tente d'invoquer une fonction non autorisée, le Proxy bloque activement la requête.
 - **Disjoncteur par Session (Circuit Breaker) :** Définissez des limites strictes de tokens par session pour plafonner les dépenses sur une tâche donnée.
@@ -60,6 +61,7 @@ Bien que la sécurité et l'observabilité soient au cœur du système, Synapse 
   - **L1 Exact Match :** Correspondance SHA-256 ultra-rapide pour les scripts qui relancent exactement la même requête.
   - **L2 Semantic Match :** Recherche vectorielle basée sur ONNX (MiniLM) pour les requêtes conceptuellement identiques. Désactivé automatiquement sur les conversations multi-tours pour éviter la corruption d'état.
   - **L3 Compression préservant les préfixes :** Élague intelligemment les anciens blocs `<thought>`, tronque les sorties d'outils surdimensionnées et condense l'historique. Il maintient un préfixe identique à l'octet près afin que le cache de prompt natif du fournisseur (Upstream) reste efficace à 99%.
+  - **Dédoublonnement Sémantique des Outils (Semantic Tool Dedup) :** Intercepte les appels d'outils du LLM et récupère les résultats mis en cache à partir d'appels similaires (recherche exacte + vectorielle ONNX avec similarité >90% via Redis VSS), effectuant des appels récursifs upstream pour éviter l'exécution côté client.
 
 > 📖 **Pour aller plus loin :** Découvrez la magie derrière notre cache L3 préservant les préfixes et la recherche sémantique L2 ONNX dans la documentation d'[Architecture de Cache](docs/caching_architecture_fr.md).
 
@@ -116,8 +118,9 @@ Le repo inclut un dashboard Next.js complet sous `./dashboard` qui transforme la
 
 ### Quoi de neuf (post-lancement)
 
-- **Agent Firewall en concept de première classe** — chaque virtual key a 9 champs firewall (`enableL1/2/3`, `killSwitch`, `sessionTokenLimit`, `allowedTools`, `blockUnknownTools`, `redactPII`, `fingerprintLoopDetect`). Persistés en Postgres, mirrorés en Redis à chaque changement pour que le proxy n'ait jamais besoin de taper dans la DB.
-- **Tool-call fingerprinting** complète le loop kill switch. Là où le kill switch se déclenche après 3 *bodies* identiques, le fingerprint se déclenche après 4 paires *(tool, args)* identiques en 30 s AND lorsque le cache miss (les outils en lecture seule sont exemptés et servis indéfiniment du cache). Le kill switch renvoie `HTTP 400` (l'agent est mort) ; le fingerprint renvoie `HTTP 429 + Retry-After: 60` (l'agent doit ralentir). La plupart des frameworks agent (Claude Code, Cursor, Continue) gèrent le 429 nativement comme "slow down".
+- **Agent Firewall en tant que concept de premier niveau** — chaque clé virtuelle intègre des configurations complètes de Pare-feu (activation du cache L1/L2/L3, kill switch, limites de tokens, liste blanche d'outils, anonymisation PII, détection de boucle par empreinte et TTL personnalisés par outil). Configurable depuis le Dashboard et synchronisé à Redis.
+- **Avertissements d'auto-correction de boucle** — remplace les blocages durs traditionnels (HTTP 400/429) par des messages de complétion HTTP 200 simulant un assistant, avertissant l'agent de l'action répétée pour qu'il s'auto-corrige dynamiquement.
+- **Dédoublonnement Sémantique d'Outils** — interception des appels d'outils dans les réponses LLM et résolution via le cache en utilisant des embeddings ONNX et Redis VSS, déclenchant des appels récursifs en amont pour court-circuiter l'exécution côté client.
 - **Détection multiturn** — le dashboard regroupe les requêtes par empreinte de conversation au lieu de par row, donc une session de debug 4 tours apparaît comme 1 row avec badges "Tour 1/2/3/4" au lieu de 4 rows séparées.
 - **MCP server en mode HTTP** — tourne en processus persistant derrière le même reverse proxy Caddy, expose 14 tools (4 gratuits + 10 payants) à tout IDE compatible MCP.
 
