@@ -77,6 +77,26 @@ export default function SettingsPage() {
 
   const [loading, setLoading] = useState(true);
 
+  const [userProfile, setUserProfile] = useState<{ id: string; email: string; tier: string; currentMonthTokens: number } | null>(null);
+  const [plans, setPlans] = useState<{ id: string; name: string; tier: string; priceId: string; amount: number; tokens: number }[]>([]);
+
+  const fetchProfileAndPlans = async () => {
+    try {
+      const [profileRes, plansRes] = await Promise.all([
+        fetch("/api/user"),
+        fetch("/api/plans")
+      ]);
+      if (profileRes.ok) {
+        setUserProfile(await profileRes.json());
+      }
+      if (plansRes.ok) {
+        setPlans(await plansRes.json());
+      }
+    } catch (err) {
+      console.error("Failed to load user profile or plans", err);
+    }
+  };
+
   const [newProvider, setNewProvider] = useState("openai");
 
   const [newRealKey, setNewRealKey] = useState("");
@@ -226,6 +246,7 @@ export default function SettingsPage() {
     } else if (status === "authenticated") {
 
       fetchKeys();
+      fetchProfileAndPlans();
 
       if (searchParams.get("success")) {
 
@@ -744,6 +765,91 @@ export default function SettingsPage() {
     show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: "easeOut" } }
 
   };
+
+  const activeTier = userProfile?.tier || "FREE";
+
+  const defaultPlans = [
+    {
+      id: "free",
+      name: "Hobby (Free)",
+      tier: "FREE",
+      priceId: "price_free",
+      amount: 0,
+      tokens: 10000000,
+      features: [
+        "10M optimization tokens / mo",
+        "1 Virtual Synapse Proxy Key",
+        "Standard latency & caching",
+        "Community support"
+      ]
+    },
+    {
+      id: "pro",
+      name: "Pro (Tier 1)",
+      tier: "PRO_1",
+      priceId: "price_mock_pro",
+      amount: 5,
+      tokens: 20000000,
+      features: [
+        "20M optimization tokens / mo",
+        "Unlimited Virtual Keys",
+        "Priority latency & L3 compression",
+        "Email support (24h response)"
+      ]
+    },
+    {
+      id: "scale",
+      name: "Scale (Tier 2)",
+      tier: "PRO_2",
+      priceId: "price_mock_enterprise",
+      amount: 15,
+      tokens: 100000000,
+      features: [
+        "100M optimization tokens / mo",
+        "Unlimited Virtual Keys",
+        "Dedicated caching nodes",
+        "Priority Support (4h response)"
+      ]
+    }
+  ];
+
+  const displayPlans = plans.length > 0 ? plans.map(p => {
+    let features: string[] = [];
+    if (p.tier === "FREE") {
+      features = [
+        "10M optimization tokens / mo",
+        "1 Virtual Synapse Proxy Key",
+        "Standard latency & caching",
+        "Community support"
+      ];
+    } else if (p.tier === "PRO_1") {
+      features = [
+        "20M optimization tokens / mo",
+        "Unlimited Virtual Keys",
+        "Priority latency & L3 compression",
+        "Email support (24h response)"
+      ];
+    } else if (p.tier === "PRO_2") {
+      features = [
+        "100M optimization tokens / mo",
+        "Unlimited Virtual Keys",
+        "Dedicated caching nodes",
+        "Priority Support (4h response)"
+      ];
+    } else {
+      features = [
+        `${(p.tokens / 1000000).toFixed(0)}M optimization tokens / mo`,
+        "Unlimited Virtual Keys",
+        "Advanced Agent Firewall features",
+        "Priority Support"
+      ];
+    }
+    return {
+      ...p,
+      features,
+      recommended: p.tier === "PRO_1"
+    };
+  }) : defaultPlans.map(p => ({ ...p, recommended: p.tier === "PRO_1" }));
 
   if (status === "loading" || loading) return <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">Loading...</div>;
 
@@ -1429,95 +1535,94 @@ export default function SettingsPage() {
 
             </div>
 
+            {userProfile && (
+              <div className="mb-8 p-6 bg-black/40 border border-white/5 rounded-2xl relative z-10">
+                <div className="flex justify-between items-center mb-2 text-xs">
+                  <span className="font-bold text-zinc-400 uppercase tracking-wider">Monthly Optimization Token Usage</span>
+                  <span className="font-mono text-emerald-400 font-bold">
+                    {userProfile.currentMonthTokens.toLocaleString()} / {
+                      activeTier === "FREE" ? "10M (10,000,000)" :
+                      activeTier === "PRO_1" ? "20M (20,000,000)" :
+                      activeTier === "PRO_2" ? "100M (100,000,000)" : "Unlimited"
+                    }
+                  </span>
+                </div>
+                <div className="w-full bg-white/10 h-2 rounded-full overflow-hidden">
+                  <div 
+                    className="bg-gradient-to-r from-emerald-500 to-teal-500 h-full transition-all duration-500"
+                    style={{ 
+                      width: `${Math.min(
+                        100, 
+                        (userProfile.currentMonthTokens / (
+                          activeTier === "FREE" ? 10000000 :
+                          activeTier === "PRO_1" ? 20000000 :
+                          activeTier === "PRO_2" ? 100000000 : Infinity
+                        )) * 100
+                      )}%` 
+                    }}
+                  />
+                </div>
+                <p className="text-[10px] text-zinc-500 mt-2">
+                  Only prompt tokens (input only) are counted against your monthly tier limits.
+                </p>
+              </div>
+            )}
+
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 relative z-10">
 
-              {/* Free Plan */}
+              {displayPlans.map((plan) => {
+                const isCurrent = plan.tier === activeTier;
+                return (
+                  <div 
+                    key={plan.priceId}
+                    className={`border p-6 rounded-2xl flex flex-col relative transition-all ${
+                      plan.recommended 
+                        ? "bg-gradient-to-br from-emerald-950/30 to-teal-950/30 border-emerald-500/30 shadow-[0_0_30px_rgba(16,185,129,0.05)]" 
+                        : "bg-black/50 border-white/10"
+                    }`}
+                  >
+                    {plan.recommended && (
+                      <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gradient-to-r from-emerald-400 to-teal-400 text-black text-[9px] font-black uppercase px-2.5 py-0.5 rounded-full tracking-wider">
+                        Recommended
+                      </div>
+                    )}
 
-              <div className="bg-black/50 border border-white/10 p-6 rounded-2xl flex flex-col">
+                    <h3 className="text-white font-bold text-lg mb-1">{plan.name}</h3>
+                    <p className="text-[10px] text-zinc-500 font-bold uppercase tracking-wider mb-4">Tier: {plan.tier}</p>
 
-                <h3 className="text-white font-bold text-xl mb-2">Hobby</h3>
+                    <div className="text-3xl font-black text-white mb-6">
+                      €{plan.amount}
+                      <span className="text-xs font-normal text-zinc-500">/mo</span>
+                    </div>
 
-                <div className="text-3xl font-black text-gray-300 mb-6">$0<span className="text-sm font-normal text-gray-500">/mo</span></div>
+                    <ul className="space-y-3 mb-8 flex-1 text-xs text-zinc-400">
+                      {plan.features.map((feat, idx) => (
+                        <li key={idx} className="flex items-center gap-2">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                          <span>{feat}</span>
+                        </li>
+                      ))}
+                    </ul>
 
-                <ul className="space-y-3 mb-8 flex-1 text-sm text-gray-400">
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Up to 50,000 API Calls / mo</li>
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> 1 Request Per Second (RPS)</li>
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Standard Support</li>
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> 1 Virtual Key</li>
-
-                </ul>
-
-                <button disabled className="w-full py-2 bg-white/10 text-gray-400 rounded-lg font-bold border border-white/5 cursor-not-allowed">
-
-                  Current Plan
-
-                </button>
-
-              </div>
-
-              {/* Pro Plan */}
-
-              <div className="bg-gradient-to-br from-emerald-900/40 to-teal-900/40 border border-emerald-500/30 p-6 rounded-2xl flex flex-col relative">
-
-                <div className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gradient-to-r from-emerald-400 to-teal-400 text-black text-xs font-black uppercase px-3 py-1 rounded-full">Recommended</div>
-
-                <h3 className="text-white font-bold text-xl mb-2">Pro</h3>
-
-                <div className="text-3xl font-black text-emerald-400 mb-6">$49<span className="text-sm font-normal text-emerald-500/50">/mo</span></div>
-
-                <ul className="space-y-3 mb-8 flex-1 text-sm text-emerald-100/70">
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Up to 1M API Calls / mo</li>
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> 10 Requests Per Second (RPS)</li>
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Priority Support</li>
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Unlimited Virtual Keys</li>
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Advanced Analytics</li>
-
-                </ul>
-
-                <button onClick={() => handleCheckout('price_mock_pro')} className="w-full py-2 bg-gradient-to-r from-emerald-500 to-teal-500 text-black rounded-lg font-bold hover:from-emerald-400 hover:to-teal-400 transition-colors shadow-lg shadow-emerald-500/20">
-
-                  Upgrade to Pro
-
-                </button>
-
-              </div>
-
-              {/* Enterprise Plan */}
-
-              <div className="bg-black/50 border border-white/10 p-6 rounded-2xl flex flex-col">
-
-                <h3 className="text-white font-bold text-xl mb-2">Enterprise</h3>
-
-                <div className="text-3xl font-black text-gray-300 mb-6">$299<span className="text-sm font-normal text-gray-500">/mo</span></div>
-
-                <ul className="space-y-3 mb-8 flex-1 text-sm text-gray-400">
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Unlimited API Calls & RPS</li>
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> 24/7 SLA Support</li>
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Custom integrations</li>
-
-                  <li className="flex items-center gap-2"><CheckCircle2 className="w-4 h-4 text-emerald-400" /> Self-hosted Proxy option</li>
-
-                </ul>
-
-                <button onClick={() => handleCheckout('price_mock_enterprise')} className="w-full py-2 bg-white/10 text-white hover:bg-white/20 rounded-lg font-bold border border-white/20 transition-colors">
-
-                  Contact Sales
-
-                </button>
-
-              </div>
+                    {isCurrent ? (
+                      <button disabled className="w-full py-2 bg-white/15 text-zinc-400 rounded-lg font-bold border border-white/5 cursor-not-allowed text-xs">
+                        Current Plan
+                      </button>
+                    ) : (
+                      <button 
+                        onClick={() => handleCheckout(plan.priceId)} 
+                        className={`w-full py-2 rounded-lg font-bold text-xs transition-all hover:scale-[1.02] active:scale-95 ${
+                          plan.recommended
+                            ? "bg-gradient-to-r from-emerald-500 to-teal-500 text-black hover:from-emerald-400 hover:to-teal-400 shadow-md shadow-emerald-500/10"
+                            : "bg-white/10 hover:bg-white/20 text-white border border-white/10"
+                        }`}
+                      >
+                        {plan.amount === 0 ? "Downgrade Plan" : `Upgrade to ${plan.name.split(" ")[0]}`}
+                      </button>
+                    )}
+                  </div>
+                );
+              })}
 
             </div>
 

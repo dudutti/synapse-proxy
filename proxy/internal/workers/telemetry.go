@@ -338,15 +338,51 @@ sessionID := fmt.Sprint(msg.Values["session_id"])
 			// schema. Splitting the lookup from the insert eliminates the
 			// off-by-one risk entirely.
 
-			// Step 1: look up the ApiKey.id
+			// Step 1: look up the ApiKey.id and userId
 			var apiKeyID string
+			var userID string
 			err = postgresDB.QueryRow(
-				`SELECT id FROM "ApiKey" WHERE "virtualKey" = $1`, vk,
-			).Scan(&apiKeyID)
+				`SELECT id, "userId" FROM "ApiKey" WHERE "virtualKey" = $1`, vk,
+			).Scan(&apiKeyID, &userID)
 			if err != nil {
 				log.Printf("DB apiKey lookup failed for vk=%s: %v", vk, err)
 				rdb.XAck(ctx, "synapse:telemetry:logs", "telemetry_group", msg.ID)
 				continue
+			}
+
+			// Step 1.5: Increment user's currentMonthTokens in DB and check/sync limits to Redis
+			if userID != "" {
+				var currentMonthTokens int
+				var tier string
+				err = postgresDB.QueryRow(
+					`UPDATE "User" SET "currentMonthTokens" = "currentMonthTokens" + $1 WHERE id = $2 RETURNING "currentMonthTokens", "tier"`,
+					promptOrig, userID,
+				).Scan(&currentMonthTokens, &tier)
+				if err != nil {
+					log.Printf("Failed to update User monthly tokens for userId=%s: %v", userID, err)
+				} else {
+					limit := 10000000 // default FREE 10M
+					switch tier {
+					case "FREE":
+						limit = 10000000
+					case "PRO_1":
+						limit = 20000000
+					case "PRO_2":
+						limit = 100000000
+					default:
+						limit = 1000000000 // 1B for Enterprise/custom
+					}
+
+					limitExceeded := "false"
+					if currentMonthTokens >= limit {
+						limitExceeded = "true"
+					}
+
+					err = rdb.HSet(ctx, "synapse:keys:"+vk, "limit_exceeded", limitExceeded).Err()
+					if err != nil {
+						log.Printf("Failed to update limit_exceeded in Redis for vk=%s: %v", vk, err)
+					}
+				}
 			}
 
 			// Step 2: insert with 27 explicit values. createdAt is omitted

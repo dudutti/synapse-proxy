@@ -22,6 +22,7 @@ export async function POST(req: Request) {
 
     // Creating a dummy checkout session if stripe keys are mock, or real if set up
     const stripeSession = await stripe.checkout.sessions.create({
+      client_reference_id: user.id,
       success_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/settings?success=true`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000"}/settings?canceled=true`,
       payment_method_types: ["card"],

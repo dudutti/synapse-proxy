@@ -1,32 +1,39 @@
-FROM golang:1.21-alpine
+# Stage 1: Build Rust Static Library
+FROM rust:alpine AS rust-builder
+RUN apk add --no-cache musl-dev gcc make
+WORKDIR /rust-build
+COPY rust-embedder ./rust-embedder
+WORKDIR /rust-build/rust-embedder
+RUN cargo build --release
 
+# Stage 2: Download Model Weights
+FROM alpine AS model-downloader
+RUN apk add --no-cache curl
+WORKDIR /models
+RUN curl -f -L -o config.json https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/config.json && \
+    curl -f -L -o tokenizer.json https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/tokenizer.json && \
+    curl -f -L -o model.safetensors https://huggingface.co/sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2/resolve/main/model.safetensors
+
+# Stage 3: Build Go Binary with CGO
+FROM golang:1.21-alpine AS go-builder
+RUN apk add --no-cache gcc musl-dev libc-dev
 WORKDIR /app
-
-# CACHEBUST forces a clean Go module rebuild every time this arg
-# changes (e.g. via --build-arg CACHEBUST=$(date +%s)). Without this,
-# Docker's `--no-cache` only invalidates the layer cache, not Go's
-# internal GOCACHE inside the layer — and we end up shipping a stale
-# binary that does not include the latest .go source.
-ARG CACHEBUST=default
-
-# Copy go.mod/go.sum first so the dep download is its own layer
 COPY go.mod go.sum* ./
 RUN go mod download
-
-# Copy all source — any change to a .go file invalidates this layer
 COPY . .
-
-# Disable Go's internal build cache by pointing it at an empty directory.
-# (Go refuses to use /dev/null because it's a character device, not a dir.)
+# Copy compiled Rust static library to the directory expected by CGO LDFLAGS
+COPY --from=rust-builder /rust-build/rust-embedder/target/release/librust_embedder.a /app/rust-embedder/target/release/librust_embedder.a
 ENV GOCACHE=/tmp/gocache-empty
 ENV GOFLAGS=-trimpath
-
-# Rebuild from absolute zero. GOCACHE points at an empty dir so Go
-# compiles every package from source every time — no stale intermediate
-# objects survive between builds. Combined with --no-cache and the
-# CACHEBUST ARG, we get a guaranteed fresh binary on every deploy.
+ENV CGO_ENABLED=1
 RUN mkdir -p /tmp/gocache-empty && go build -o proxy-server ./cmd/server/main.go && chmod +x proxy-server
 
+# Stage 4: Runtime Image
+FROM alpine
+RUN apk add --no-cache ca-certificates libgcc
+WORKDIR /app
+COPY --from=go-builder /app/proxy-server ./
+COPY --from=model-downloader /models /app/models/paraphrase-multilingual-MiniLM-L12-v2
 EXPOSE 8080
-
 CMD ["./proxy-server"]
+

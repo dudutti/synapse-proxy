@@ -8,10 +8,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
-	"net/http"
-	"os"
 	"strconv"
 	"strings"
+	"synapse-proxy/cache"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/pkoukk/tiktoken-go"
@@ -156,23 +155,16 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 
 	var payloadVector []float32
 
-	// 2. L2 Cache (Semantic Search via ONNX + Redis VSS) â€” filtered per user via TAG
-	onnxUrl := os.Getenv("ONNX_API_URL")
-	if enableL2 && onnxUrl != "" && !hasImage && !disableL2 { // BYPASS L2 if payload contains an image or is a multi-turn conversation
-		reqBody, _ := json.Marshal(map[string]string{"text": embeddingText})
-		resp, err := http.Post(onnxUrl, "application/json", bytes.NewBuffer(reqBody))
-		if err == nil {
-			defer resp.Body.Close()
-			var onnxRes struct {
-				Vector []float32 `json:"vector"`
-			}
-			if json.NewDecoder(resp.Body).Decode(&onnxRes) == nil && len(onnxRes.Vector) > 0 {
-				payloadVector = onnxRes.Vector
+	// 2. L2 Cache (Semantic Search via local CGO Rust Embedder + Redis VSS) — filtered per user via TAG
+	if enableL2 && cache.GlobalEmbedder != nil && !hasImage && !disableL2 {
+		vector, err := cache.GlobalEmbedder.GenerateEmbedding(embeddingText)
+		if err == nil && len(vector) > 0 {
+			payloadVector = vector
 
-				// Convert float32 array to byte array for Redis
-				buf := new(bytes.Buffer)
-				if err := binary.Write(buf, binary.LittleEndian, onnxRes.Vector); err == nil {
-					vectorBytes := buf.Bytes()
+			// Convert float32 array to byte array for Redis
+			buf := new(bytes.Buffer)
+			if err := binary.Write(buf, binary.LittleEndian, vector); err == nil {
+				vectorBytes := buf.Bytes()
 
 					// Escape special chars in virtualKey for Redis TAG filter
 					escapedVK := escapeRedisTag(virtualKey)
@@ -224,7 +216,6 @@ func ProcessRequest(ctx context.Context, rdb *redis.Client, payload []byte, sema
 				}
 			}
 		}
-	}
 
 	// Ensure l2Prefix is used (suppress unused warning) â€” used by main.go for cache population
 	_ = l2Prefix

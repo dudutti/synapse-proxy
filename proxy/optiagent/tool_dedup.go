@@ -8,11 +8,10 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"log"
-	"net/http"
-	"os"
 	"regexp"
 	"strconv"
 	"strings"
+	"synapse-proxy/cache"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -314,23 +313,13 @@ func StoreToolCallCache(ctx context.Context, rdb *redis.Client, virtualKey strin
 	exactKey := "synapse:toolcache:exact:" + virtualKey + ":" + toolName + ":" + hex.EncodeToString(h[:])
 	_ = rdb.Set(ctx, exactKey, []byte(output), 24*time.Hour).Err()
 
-	onnxUrl := os.Getenv("ONNX_API_URL")
-	if onnxUrl == "" {
+	if cache.GlobalEmbedder == nil {
 		return
 	}
 
 	// Retrieve embedding vector of arguments
-	reqBody, _ := json.Marshal(map[string]string{"text": arguments})
-	resp, err := http.Post(onnxUrl, "application/json", bytes.NewBuffer(reqBody))
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-
-	var onnxRes struct {
-		Vector []float32 `json:"vector"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&onnxRes) != nil || len(onnxRes.Vector) == 0 {
+	vector, err := cache.GlobalEmbedder.GenerateEmbedding(arguments)
+	if err != nil || len(vector) == 0 {
 		return
 	}
 
@@ -338,7 +327,7 @@ func StoreToolCallCache(ctx context.Context, rdb *redis.Client, virtualKey strin
 
 	// Convert float32 vector to byte array for Redis
 	buf := new(bytes.Buffer)
-	if err := binary.Write(buf, binary.LittleEndian, onnxRes.Vector); err != nil {
+	if err := binary.Write(buf, binary.LittleEndian, vector); err != nil {
 		return
 	}
 	vectorBytes := buf.Bytes()
@@ -376,27 +365,17 @@ func QueryToolCallCache(ctx context.Context, rdb *redis.Client, virtualKey strin
 	}
 
 	// 2. Semantic VSS match
-	onnxUrl := os.Getenv("ONNX_API_URL")
-	if onnxUrl == "" {
+	if cache.GlobalEmbedder == nil {
 		return "", false
 	}
 
-	reqBody, _ := json.Marshal(map[string]string{"text": arguments})
-	resp, err := http.Post(onnxUrl, "application/json", bytes.NewBuffer(reqBody))
-	if err != nil {
-		return "", false
-	}
-	defer resp.Body.Close()
-
-	var onnxRes struct {
-		Vector []float32 `json:"vector"`
-	}
-	if json.NewDecoder(resp.Body).Decode(&onnxRes) != nil || len(onnxRes.Vector) == 0 {
+	vector, err := cache.GlobalEmbedder.GenerateEmbedding(arguments)
+	if err != nil || len(vector) == 0 {
 		return "", false
 	}
 
 	buf := new(bytes.Buffer)
-	if err := binary.Write(buf, binary.LittleEndian, onnxRes.Vector); err != nil {
+	if err := binary.Write(buf, binary.LittleEndian, vector); err != nil {
 		return "", false
 	}
 	vectorBytes := buf.Bytes()

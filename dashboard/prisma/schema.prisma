@@ -222,3 +222,15 @@ model AlertEvent {
   @@index([firedAt])
   @@index([acknowledged, firedAt])
 }
+
+model StripePlan {
+  id        String   @id @default(cuid())
+  name      String   // e.g., "Pro (Tier 1)"
+  tier      String   // e.g., "PRO_1"
+  priceId   String   @unique // Stripe Price ID
+  amount    Float    // e.g., 5.0
+  tokens    Int      // monthly token limit, e.g. 20000000 (20M)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+

@@ -11,6 +11,7 @@ import (
 	"syscall"
 	"time"
 
+	"synapse-proxy/cache"
 	"synapse-proxy/internal/db"
 	"synapse-proxy/internal/handlers"
 	"synapse-proxy/internal/mcp"
@@ -59,6 +60,14 @@ func main() {
 
 	// 1. Initialize Utils (Tiktoken)
 	utils.InitTiktoken()
+
+	// 1b. Initialize Native Embedder (CGO/Rust)
+	if err := cache.InitGlobalEmbedder(); err != nil {
+		log.Printf("Warning: Failed to initialize global native embedder: %v", err)
+	} else {
+		log.Println("Global native embedder initialized successfully.")
+		defer cache.CloseGlobalEmbedder()
+	}
 
 	// 2. Initialize Database Connections
 	db.InitRedis()

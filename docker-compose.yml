@@ -32,13 +32,6 @@ services:
       - redis_data:/data
     restart: unless-stopped
 
-  onnx-embedder:
-    build: ./proxy/onnx-embedder
-    container_name: synapse-proxy-onnx
-    ports:
-      - "8000:8000"
-    restart: unless-stopped
-
   proxy:
     build: ./proxy
     container_name: synapse-proxy
@@ -48,14 +41,12 @@ services:
     environment:
       - REDIS_ADDR=redis:6379
       - DATABASE_URL=postgresql://${POSTGRES_USER:-synapse-proxy}:${POSTGRES_PASSWORD:-please-change-me}@postgres:5432/${POSTGRES_DB:-synapse-proxy_db}?sslmode=disable
-      - ONNX_API_URL=http://onnx-embedder:8000/embed
       # A free-tier virtual key is auto-seeded on first boot and printed
       # in the proxy logs. Override here to use a specific key in dev.
       # DEFAULT_VIRTUAL_KEY=sk-opti-CHANGE-ME
       # FORCE_MODEL=minimax-m2.7
     depends_on:
       - redis
-      - onnx-embedder
     restart: unless-stopped
 
 volumes:
