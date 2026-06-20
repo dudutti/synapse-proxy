@@ -73,31 +73,21 @@ Bien que la sécurité et l'observabilité soient au cœur du système, Synapse 
 
 ## 🔌 Serveur MCP (Model Context Protocol)
 
-Synapse Proxy agit également comme un serveur MCP robuste, s'intégrant parfaitement avec des IDE tels que Cursor, Claude Code et Continue.
+Synapse Proxy agit également comme un serveur MCP robuste, exposant **14 outils spécialisés** (incluant les Benchmarks A/B, l'enregistrement de sessions, la gestion de clés et les analyses) directement à votre IDE (Cursor, Claude Code, Continue, etc.).
 
-Exécutez-le en **mode stdio** pour une utilisation CLI unique, ou en **mode HTTP Streamable** pour un processus longue durée derrière votre reverse proxy.
+Puisque Synapse Proxy est entièrement open source, **les 14 outils sont totalement gratuits à utiliser** localement ou sur votre instance auto-hébergée.
+
+Pour activer l'ensemble des 14 outils, lancez le serveur avec l'option `--mcp-tier=full` (en pointant vers votre tableau de bord auto-hébergé) :
 
 ```bash
-# Serveur MCP, mode stdio (un processus par client)
-./synapse-proxy --mcp --mcp-tier=free
+# Mode stdio (recommandé pour l'intégration locale de Cursor / IDE)
+./synapse-proxy --mcp --mcp-tier=full
 
-# Serveur MCP, mode HTTP (Production, SaaS-ready)
-./synapse-proxy --mcp-http --mcp-http-port=8081 --mcp-tier=full --dashboard-url=https://synapse-proxy.com
+# Mode HTTP SSE (pour les déploiements serveurs distants ou multi-utilisateurs)
+./synapse-proxy --mcp-http --mcp-http-port=8081 --mcp-tier=full --dashboard-url=http://localhost:3000
 ```
 
-**Configuration sans Docker (Exemple Cursor) :**
-```jsonc
-{
-  "mcpServers": {
-    "synapse-proxy": {
-      "url": "https://synapse-proxy.com/mcp",
-      "headers": {
-        "Authorization": "Bearer sk-opti-VOTRE_CLE"
-      }
-    }
-  }
-}
-```
+> 📖 **Pour aller plus loin :** Consultez le [Guide du Serveur MCP](docs/mcp_server.md) pour obtenir la liste complète des 14 outils, leurs schémas de paramètres et les instructions de configuration de l'IDE.
 
 ---
 

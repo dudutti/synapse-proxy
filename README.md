@@ -73,31 +73,21 @@ Though security and observability take center stage, Synapse Proxy features a st
 
 ## 🔌 MCP Server (Model Context Protocol)
 
-Synapse Proxy doubles as a robust MCP server, seamlessly integrating with IDEs like Cursor, Claude Code, and Continue.
+Synapse Proxy doubles as a robust MCP server, exposing **14 specialized tools** (including A/B Benchmarks, Session Recording, Key Management, and Analytics) directly to your IDE (Cursor, Claude Code, Continue, etc.).
 
-Run it in **stdio mode** for one-shot CLI usage, or in **Streamable HTTP mode** for a long-lived process behind your reverse proxy.
+Since Synapse Proxy is fully open source, **all 14 tools are completely free to use** locally or on your self-hosted stack.
+
+To expose all 14 tools, run the server with `--mcp-tier=full` (pointing it to your self-hosted dashboard):
 
 ```bash
-# MCP server, stdio mode (one process per client)
-./synapse-proxy --mcp --mcp-tier=free
+# Stdio mode (recommended for local Cursor/IDE integrations)
+./synapse-proxy --mcp --mcp-tier=full
 
-# MCP server, HTTP mode (production, SaaS-ready)
-./synapse-proxy --mcp-http --mcp-http-port=8081 --mcp-tier=full --dashboard-url=https://synapse-proxy.com
+# HTTP SSE mode (for remote/multi-user server setup)
+./synapse-proxy --mcp-http --mcp-http-port=8081 --mcp-tier=full --dashboard-url=http://localhost:3000
 ```
 
-**Zero-Docker Configuration (Cursor Example):**
-```jsonc
-{
-  "mcpServers": {
-    "synapse-proxy": {
-      "url": "https://synapse-proxy.com/mcp",
-      "headers": {
-        "Authorization": "Bearer sk-opti-VOTRE_CLE"
-      }
-    }
-  }
-}
-```
+> 📖 **Deep Dive:** Read the [Model Context Protocol (MCP) Guide](docs/mcp_server.md) for the complete list of all 14 tools, parameter schemas, and IDE setup details.
 
 ---
 
