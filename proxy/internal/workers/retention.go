@@ -35,9 +35,10 @@ func runRetentionCleanup() {
 	// 1. Clean FREE tier (7 days)
 	resFree, err := postgresDB.ExecContext(ctx, `
 		DELETE FROM "RequestLog"
-		USING "ApiKey"
+		USING "ApiKey", "User"
 		WHERE "RequestLog"."apiKeyId" = "ApiKey"."id"
-		  AND "ApiKey"."tier" = 'FREE'
+		  AND "ApiKey"."userId" = "User"."id"
+		  AND "User"."tier" = 'FREE'
 		  AND "RequestLog"."createdAt" < NOW() - INTERVAL '7 days'
 	`)
 	if err != nil {
@@ -52,9 +53,10 @@ func runRetentionCleanup() {
 	// 2. Clean Premium tiers (30 days)
 	resPro, err := postgresDB.ExecContext(ctx, `
 		DELETE FROM "RequestLog"
-		USING "ApiKey"
+		USING "ApiKey", "User"
 		WHERE "RequestLog"."apiKeyId" = "ApiKey"."id"
-		  AND "ApiKey"."tier" != 'FREE'
+		  AND "ApiKey"."userId" = "User"."id"
+		  AND "User"."tier" != 'FREE'
 		  AND "RequestLog"."createdAt" < NOW() - INTERVAL '30 days'
 	`)
 	if err != nil {
