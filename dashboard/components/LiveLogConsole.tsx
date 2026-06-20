@@ -72,7 +72,7 @@ export function LiveLogConsole() {
   const [activeLevels, setActiveLevels] = useState<Set<string>>(new Set(CACHE_LEVELS));
   const [agentFilter, setAgentFilter] = useState("");
   const [minCostSaved, setMinCostSaved] = useState(0); // cents
-  const [statusMsg, setStatusMsg] = useState<string>("connecting…");
+  const [statusMsg, setStatusMsg] = useState<string>("connecting\u2026");
   const [stats, setStats] = useState({ received: 0, filtered: 0, errors: 0 });
   const [autoScroll, setAutoScroll] = useState(true);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -134,11 +134,11 @@ export function LiveLogConsole() {
     const es = new EventSource("/api/admin/logs/stream");
     es.onopen = () => {
       setConnected(true);
-      setStatusMsg("connected · streaming live RequestLog");
+      setStatusMsg("connected \u00b7 streaming live RequestLog");
     };
     es.onerror = () => {
       setConnected(false);
-      setStatusMsg("connection lost · reconnecting…");
+      setStatusMsg("connection lost \u00b7 reconnecting\u2026");
     };
     es.onmessage = (e) => {
       try {
@@ -266,7 +266,7 @@ export function LiveLogConsole() {
             );
           })}
           <span className="text-[10px] text-zinc-600 ml-auto font-mono">
-            {stats.received} received · {filtered.length} shown · {bufferStats.totalCost.toFixed(4)}$ saved
+            {stats.received} received {"\u00b7"} {filtered.length} shown {"\u00b7"} {bufferStats.totalCost.toFixed(4)}$ saved
           </span>
         </div>
 
@@ -274,7 +274,7 @@ export function LiveLogConsole() {
         <div className="flex flex-wrap items-center gap-3">
           <input
             type="text"
-            placeholder="Filter agent / model…"
+            placeholder="Filter agent / model\u2026"
             value={agentFilter}
             onChange={(e) => setAgentFilter(e.target.value)}
             className="flex-1 min-w-[180px] bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-zinc-200 placeholder-zinc-600 outline-none focus:border-emerald-500/50 font-mono"
@@ -309,7 +309,7 @@ export function LiveLogConsole() {
             <div className="text-center space-y-2">
               <Database className="w-8 h-8 mx-auto opacity-30" />
               <p>No logs match current filters.</p>
-              <p className="text-[10px]">Stream is live · waiting for traffic…</p>
+              <p className="text-[10px]">Stream is live {"\u00b7"} waiting for traffic{"\u2026"}</p>
             </div>
           </div>
         ) : (
@@ -332,15 +332,15 @@ export function LiveLogConsole() {
                   >
                     {l.cacheLevel || "MISS"}
                   </span>
-                  <span className="text-zinc-300 w-44 truncate">{l.model || "—"}</span>
+                  <span className="text-zinc-300 w-44 truncate">{l.model || "\u2014"}</span>
                   <span className="text-zinc-500 w-20 truncate text-[10px]">
                     {l.provider}
                   </span>
                   <span className="text-zinc-400 tabular-nums w-24 text-right">
-                    {fmtNum(l.tokensIn)} → {fmtNum(l.tokensInOpt)}
+                    {fmtNum(l.tokensIn)} {"\u2192"} {fmtNum(l.tokensInOpt)}
                   </span>
                   <span className="text-zinc-400 tabular-nums w-20 text-right">
-                    {l.durationMs != null ? `${l.durationMs}ms` : "—"}
+                    {l.durationMs != null ? `${l.durationMs}ms` : "\u2014"}
                   </span>
                   <span className="text-emerald-400 tabular-nums w-20 text-right font-bold">
                     ${l.costSaved.toFixed(4)}

@@ -135,7 +135,7 @@ export default function SessionsHistoryPage() {
         )}
 
         {loading ? (
-          <div className="text-zinc-500">Loading sessions…</div>
+          <div className="text-zinc-500">Loading sessions{"\u2026"}</div>
         ) : sessions.length === 0 ? (
           <div className="p-12 rounded-2xl border border-dashed border-white/10 text-center text-zinc-500">
             <Database className="w-10 h-10 mx-auto mb-3 opacity-40" />
@@ -165,7 +165,7 @@ export default function SessionsHistoryPage() {
                     className="border-t border-white/5 hover:bg-white/5 cursor-pointer transition"
                   >
                     <td className="px-4 py-3 font-mono text-xs text-zinc-300">
-                      {s.sessionId.slice(0, 32)}…
+                      {s.sessionId.slice(0, 32)}{"\u2026"}
                     </td>
                     <td className="px-4 py-3 text-zinc-300">{fmtDate(s.startedAt)}</td>
                     <td className="px-4 py-3 text-zinc-300">{fmtDuration(s.durationMs)}</td>
@@ -173,7 +173,7 @@ export default function SessionsHistoryPage() {
                     <td className="px-4 py-3 text-right font-mono text-emerald-400">{s.cacheHits}</td>
                     <td className="px-4 py-3 text-right font-mono text-zinc-400 text-xs">
                       {s.promptTokensOrig.toLocaleString()}/{s.completionTokensOrig.toLocaleString()}
-                      {" → "}
+                      {" \u2192 "}
                       {s.promptTokensOpt.toLocaleString()}/{s.completionTokensOpt.toLocaleString()}
                     </td>
                     <td className="px-4 py-3 text-right font-mono text-emerald-400">
@@ -199,11 +199,21 @@ export default function SessionsHistoryPage() {
                 <X className="w-6 h-6" />
               </button>
 
-              <h2 className="text-2xl font-bold mb-1 text-white flex items-center gap-3">
-                <Activity className="text-emerald-400" />
-                Session Summary
-              </h2>
-              <p className="text-xs font-mono text-zinc-500 mb-6">{openSessionSummary.sessionId}</p>
+              <div className="flex items-center justify-between flex-wrap gap-3 mb-6">
+                <div>
+                  <h2 className="text-2xl font-bold mb-1 text-white flex items-center gap-3">
+                    <Activity className="text-emerald-400" />
+                    Session Summary
+                  </h2>
+                  <p className="text-xs font-mono text-zinc-500">{openSessionSummary.sessionId}</p>
+                </div>
+                <button
+                  onClick={() => router.push(`/admin/explorer?sessionId=${encodeURIComponent(openSessionSummary.sessionId)}`)}
+                  className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition shadow-lg shadow-blue-600/10"
+                >
+                  Explore Session Logs {"\u2192"}
+                </button>
+              </div>
 
               {/* --- Top stats: duration, requests, hit rate --- */}
               <div className="grid grid-cols-3 gap-3">
@@ -238,7 +248,7 @@ export default function SessionsHistoryPage() {
               {openLoading && (
                 <div className="p-4 mt-3 rounded-lg bg-white/5 text-zinc-400 text-sm flex items-center gap-2">
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Loading full per-class breakdown…
+                  Loading full per-class breakdown{"\u2026"}
                 </div>
               )}
 

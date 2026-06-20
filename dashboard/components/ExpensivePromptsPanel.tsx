@@ -72,7 +72,7 @@ export function ExpensivePromptsPanel() {
           </h2>
           <span className="text-[10px] text-zinc-500 font-mono flex items-center gap-2">
             <span>
-              {rows.length} prompts · {meta.totalHits.toLocaleString()} total hits · ~${meta.totalFallbackCost.toFixed(2)} at $1/MTok fallback
+              {rows.length} prompts {"\u00b7"} {meta.totalHits.toLocaleString()} total hits {"\u00b7"} ~${meta.totalFallbackCost.toFixed(2)} at $1/MTok fallback
             </span>
           </span>
         </div>
@@ -121,7 +121,7 @@ export function ExpensivePromptsPanel() {
           </thead>
           <tbody className="divide-y divide-white/[0.04]">
             {loading && rows.length === 0 && (
-              <tr><td colSpan={8} className="px-3 py-6 text-center text-zinc-500">Loading…</td></tr>
+               <tr><td colSpan={8} className="px-3 py-6 text-center text-zinc-500">Loading{"\u2026"}</td></tr>
             )}
             {!loading && rows.length === 0 && (
               <tr><td colSpan={8} className="px-3 py-6 text-center text-zinc-500">No data in this window.</td></tr>
@@ -153,7 +153,7 @@ function ExpensiveRow({ row, rank, expanded, onToggle }: { row: Row; rank: numbe
             {row.promptPreview.slice(0, 80) || "(empty)"}
           </div>
         </td>
-        <td className="px-3 py-2 font-mono text-zinc-400 whitespace-nowrap">{row.model || "—"}</td>
+        <td className="px-3 py-2 font-mono text-zinc-400 whitespace-nowrap">{row.model || "\u2014"}</td>
         <td className="px-3 py-2 text-right font-mono text-zinc-200 tabular-nums">{row.hits}</td>
         <td className="px-3 py-2 text-right font-mono text-zinc-300 tabular-nums">
           {row.tokensOrig.toLocaleString()}
@@ -167,7 +167,7 @@ function ExpensiveRow({ row, rank, expanded, onToggle }: { row: Row; rank: numbe
           {row.l2Potential > 0 ? (
             <span className="text-emerald-300 font-bold">+${row.l2Potential.toFixed(3)}</span>
           ) : (
-            <span className="text-zinc-600">—</span>
+            <span className="text-zinc-600">{"\u2014"}</span>
           )}
         </td>
         <td className="px-3 py-2 text-zinc-500">

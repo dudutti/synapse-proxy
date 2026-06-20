@@ -1,7 +1,7 @@
 "use client";
 
 import { useSession } from "next-auth/react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState, useRef } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
@@ -27,8 +27,11 @@ interface PanelSettings {
 }
 
 interface ChatMsg {
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system" | "tool" | "function";
   content: string;
+  name?: string;
+  tool_call_id?: string;
+  tool_calls?: any[];
   latency?: number | null;
   isCached?: boolean;
   isStreaming?: boolean;
@@ -150,11 +153,11 @@ function PanelHeader({
           className={`bg-white/5 border border-white/10 ${accentText} text-xs rounded-lg px-2 py-1.5 outline-none font-mono focus:${accentBorder} transition w-44`}
         >
           <option value="" className="bg-gray-900 text-white">
-            — Select a key —
+            {"\u2014"} Select a key {"\u2014"}
           </option>
           {keys.map((k) => (
             <option key={k.id} value={k.virtualKey} className="bg-gray-900 text-white">
-              {k.provider.toUpperCase()} ({k.virtualKey.substring(0, 15)}…)
+              {k.provider.toUpperCase()} ({k.virtualKey.substring(0, 15)}{"\u2026"})
             </option>
           ))}
         </select>
@@ -164,9 +167,12 @@ function PanelHeader({
             <select
               value={settings.model}
               onChange={(e) => setSettings({ ...settings, model: e.target.value })}
-              className="bg-white/5 border border-white/10 text-white text-xs rounded-lg px-2 py-1.5 outline-none focus:border-blue-500/50 transition w-44"
+              className="bg-white/5 border border-white/10 text-white text-xs rounded-lg px-2 py-1.5 outline-none focus:border-blue-500/50 transition w-44 font-mono"
             >
-              {models.map((m) => (
+              <option value="" className="bg-gray-900 text-white">
+                {"\u2014"} Select a model {"\u2014"}
+              </option>
+              {models.map((m: any) => (
                 <option key={m.id} value={m.id} className="bg-gray-900 text-white">
                   {m.name || m.id}
                 </option>
@@ -177,7 +183,7 @@ function PanelHeader({
               type="text"
               value={settings.model}
               onChange={(e) => setSettings({ ...settings, model: e.target.value })}
-              placeholder={loading ? "Loading…" : "Model ID"}
+              placeholder={loading ? "Loading\u2026" : "Model ID"}
               className="bg-white/5 border border-white/10 text-white text-xs rounded-lg px-2 py-1.5 outline-none focus:border-blue-500/50 transition w-44"
             />
           ))}
@@ -186,56 +192,111 @@ function PanelHeader({
   );
 }
 
-const ChatBubble = ({ msg, isControl }: { msg: ChatMsg; isControl: boolean }) => (
-  <motion.div
-    initial={{ opacity: 0, y: 10 }}
-    animate={{ opacity: 1, y: 0 }}
-    className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
-  >
-    <div className={`max-w-[85%] rounded-2xl p-5 ${
-      msg.role === 'user'
-        ? 'bg-blue-600/20 border border-blue-500/30 text-white rounded-br-none backdrop-blur-md shadow-lg shadow-blue-500/10'
-        : 'bg-white/5 border border-white/10 text-gray-200 rounded-bl-none backdrop-blur-md shadow-lg flex flex-col'
-    }`}>
-      {msg.role === 'assistant' && (
-        <div className="flex items-center gap-3 mb-3 border-b border-white/5 pb-2">
-          {isControl ? <Activity className="w-4 h-4 text-gray-400" /> : <Sparkles className="w-4 h-4 text-emerald-400" />}
-          <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Assistant</span>
+const ChatBubble = ({ msg, isControl }: { msg: ChatMsg; isControl: boolean }) => {
+  if (msg.role === "system") {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full flex justify-center my-3"
+      >
+        <div className="max-w-[90%] w-full rounded-2xl border border-dashed border-white/10 bg-white/[0.02] p-5 text-xs font-mono text-zinc-400 shadow-md">
+          <span className="text-zinc-500 font-bold uppercase tracking-widest text-[9px] block mb-2">
+            ⚙️ System Instructions
+          </span>
+          <div className="whitespace-pre-wrap leading-relaxed max-h-[150px] overflow-y-auto pr-2">{msg.content}</div>
+        </div>
+      </motion.div>
+    );
+  }
 
-          <div className="ml-auto flex items-center gap-2">
-            <span className={`text-xs font-mono ${isControl ? 'text-gray-500' : 'text-emerald-500/80'}`}>
-              {msg.latency !== null && msg.latency !== undefined ? `${msg.latency}ms` : (msg.isStreaming ? '...' : 'Error')}
-            </span>
-            {msg.isCached ? (
-              <span className="flex items-center gap-1 bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-[10px] uppercase font-bold px-2 py-0.5 rounded-full shadow-[0_0_10px_rgba(16,185,129,0.2)]">
-                <Zap className="w-3 h-3" /> Hit
+  if (msg.role === "tool" || msg.role === "function") {
+    return (
+      <motion.div
+        initial={{ opacity: 0, y: 10 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="w-full flex justify-start my-2"
+      >
+        <div className="max-w-[85%] w-full rounded-2xl border border-amber-500/10 bg-amber-500/5 p-4 text-xs font-mono text-amber-300/90 shadow-md flex flex-col">
+          <span className="text-amber-500/70 font-bold uppercase tracking-widest text-[9px] block mb-2">
+            🔧 Tool Return: {msg.name || "unknown"}
+          </span>
+          {msg.tool_call_id && (
+            <span className="text-zinc-500 text-[8px] mb-2 font-mono block">ID: {msg.tool_call_id}</span>
+          )}
+          <div className="whitespace-pre-wrap leading-relaxed max-h-[200px] overflow-y-auto pr-2 bg-black/20 rounded-lg p-2 border border-white/5">{msg.content}</div>
+        </div>
+      </motion.div>
+    );
+  }
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
+    >
+      <div className={`max-w-[85%] rounded-2xl p-5 ${
+        msg.role === 'user'
+          ? 'bg-blue-600/20 border border-blue-500/30 text-white rounded-br-none backdrop-blur-md shadow-lg shadow-blue-500/10'
+          : 'bg-white/5 border border-white/10 text-gray-200 rounded-bl-none backdrop-blur-md shadow-lg flex flex-col'
+      }`}>
+        {msg.role === 'assistant' && (
+          <div className="flex items-center gap-3 mb-3 border-b border-white/5 pb-2">
+            {isControl ? <Activity className="w-4 h-4 text-gray-400" /> : <Sparkles className="w-4 h-4 text-emerald-400" />}
+            <span className="text-xs font-bold text-gray-400 uppercase tracking-widest">Assistant</span>
+
+            <div className="ml-auto flex items-center gap-2">
+              <span className={`text-xs font-mono ${isControl ? 'text-gray-500' : 'text-emerald-500/80'}`}>
+                {msg.latency !== null && msg.latency !== undefined ? `${msg.latency}ms` : (msg.isStreaming ? '...' : 'Error')}
               </span>
-            ) : (
-              <span className="bg-gray-800 text-gray-400 text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border border-gray-700">
-                API
-              </span>
-            )}
+              {msg.isCached ? (
+                <span className="flex items-center gap-1 bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 text-[10px] uppercase font-bold px-2 py-0.5 rounded-full shadow-[0_0_10px_rgba(16,185,129,0.2)]">
+                  <Zap className="w-3 h-3" /> Hit
+                </span>
+              ) : (
+                <span className="bg-gray-800 text-gray-400 text-[10px] uppercase font-bold px-2 py-0.5 rounded-full border border-gray-700">
+                  API
+                </span>
+              )}
+            </div>
           </div>
-        </div>
-      )}
-      {msg.role === 'assistant' ? (
-        <ArtifactRenderer content={msg.content} />
-      ) : (
-        <div className="whitespace-pre-wrap text-sm leading-relaxed">
-          {msg.content}
-        </div>
-      )}
-      {msg.isStreaming && (
-        <span className={`inline-block w-2 h-5 ml-0.5 animate-pulse rounded-sm ${isControl ? 'bg-gray-500' : 'bg-emerald-400'}`} />
-      )}
-      {msg.role === 'assistant' && msg.stats && <MessageStats stats={msg.stats} isControl={isControl} />}
-    </div>
-  </motion.div>
-);
+        )}
+        {msg.role === 'assistant' ? (
+          <ArtifactRenderer content={msg.content} />
+        ) : (
+          <div className="whitespace-pre-wrap text-sm leading-relaxed">
+            {msg.content}
+          </div>
+        )}
+        {msg.isStreaming && (
+          <span className={`inline-block w-2 h-5 ml-0.5 animate-pulse rounded-sm ${isControl ? 'bg-gray-500' : 'bg-emerald-400'}`} />
+        )}
+        {msg.role === 'assistant' && msg.tool_calls && msg.tool_calls.length > 0 && (
+          <div className="mt-3 space-y-2 border-t border-white/5 pt-3">
+            {msg.tool_calls.map((tc: any, index: number) => (
+              <div key={index} className="text-xs font-mono text-cyan-400 bg-cyan-950/20 border border-cyan-800/20 rounded-xl p-3">
+                <span className="text-cyan-500/70 font-bold uppercase tracking-widest text-[9px] block mb-1">
+                  ⚙️ Tool Call: {tc.function.name}
+                </span>
+                <span className="text-[8px] text-zinc-500 block mb-2 font-mono">ID: {tc.id}</span>
+                <pre className="text-[10px] text-cyan-300/90 whitespace-pre-wrap overflow-x-auto bg-black/30 rounded p-2 border border-cyan-500/10">
+                  {tc.function.arguments}
+                </pre>
+              </div>
+            ))}
+          </div>
+        )}
+        {msg.role === 'assistant' && msg.stats && <MessageStats stats={msg.stats} isControl={isControl} />}
+      </div>
+    </motion.div>
+  );
+};
 
 export default function PlaygroundPage() {
   const { status } = useSession();
   const router = useRouter();
+  const searchParams = useSearchParams();
 
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [sideBySide, setSideBySide] = useState(true);
@@ -267,7 +328,7 @@ export default function PlaygroundPage() {
         .then((data) => {
           if (Array.isArray(data)) {
             setKeys(data);
-            if (data.length > 0) {
+            if (data.length > 0 && !searchParams?.get("forkRequestId")) {
               const first = data[0].virtualKey;
               setOpti({ keyId: first, model: data[0].defaultModel || "" });
               setCtrl({ keyId: first, model: data[0].defaultModel || "" });
@@ -275,14 +336,93 @@ export default function PlaygroundPage() {
           }
         });
     }
-  }, [status, router]);
+  }, [status, router, searchParams]);
+
+  useEffect(() => {
+    const forkRequestId = searchParams?.get("forkRequestId");
+    if (!forkRequestId || keys.length === 0) return;
+
+    let cancelled = false;
+    const loadFork = async () => {
+      try {
+        const toastId = toast.loading("Loading forked conversation turn...");
+        const r = await fetch(`/api/admin/explorer/${forkRequestId}`);
+        if (!r.ok) throw new Error("Request not found");
+        const data = await r.json();
+        const row = data.row;
+        if (!row) throw new Error("Request row missing");
+
+        if (cancelled) {
+          toast.dismiss(toastId);
+          return;
+        }
+
+        const originalPayload = row.originalPayload;
+        if (!originalPayload) {
+          toast.error("Cannot fork: request payload was not logged (Zero-Log mode active).", { id: toastId });
+          return;
+        }
+
+        let payload: any = {};
+        try {
+          payload = JSON.parse(originalPayload);
+        } catch {
+          toast.error("Failed to parse request payload JSON.", { id: toastId });
+          return;
+        }
+
+        const rawMessages = payload.messages || [];
+
+        // Map raw messages to ChatMsg type
+        const loadedMessages: ChatMsg[] = rawMessages.map((m: any) => ({
+          role: m.role,
+          content: typeof m.content === "string" ? m.content : JSON.stringify(m.content),
+          name: m.name,
+          tool_call_id: m.tool_call_id,
+          tool_calls: m.tool_calls,
+        }));
+
+        // Select key matching row.apiKeyId
+        const matchedKey = keys.find((k) => k.id === row.apiKeyId);
+        if (matchedKey) {
+          setOpti({ keyId: matchedKey.virtualKey, model: row.model });
+          setCtrl({ keyId: matchedKey.virtualKey, model: row.model });
+        } else {
+          // Fallback: match by provider
+          const byProv = keys.find((k) => k.provider.toLowerCase() === row.provider.toLowerCase());
+          if (byProv) {
+            setOpti({ keyId: byProv.virtualKey, model: row.model });
+            setCtrl({ keyId: byProv.virtualKey, model: row.model });
+          } else if (keys.length > 0) {
+            // Ultimate fallback
+            setOpti({ keyId: keys[0].virtualKey, model: row.model });
+            setCtrl({ keyId: keys[0].virtualKey, model: row.model });
+          }
+        }
+
+        setMessagesOpti(loadedMessages);
+        setMessagesCtrl(loadedMessages);
+
+        toast.success("Successfully loaded conversation sandbox!", { id: toastId });
+      } catch (err) {
+        console.error("[fork] failed to load request:", err);
+        toast.error("Failed to load forked session.");
+      }
+    };
+
+    loadFork();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [searchParams, keys]);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messagesOpti, messagesCtrl, isTyping]);
 
   const streamChat = async (
-    userMsg: string,
+    history: ChatMsg[],
     settings: PanelSettings,
     bypass: boolean,
     setMsgs: (updater: (prev: ChatMsg[]) => ChatMsg[]) => void,
@@ -302,6 +442,15 @@ export default function PlaygroundPage() {
       { role: "assistant", content: "", isCached: false, isStreaming: true },
     ]);
 
+    // Sanitize message objects to keep only standard keys expected by the API
+    const apiMessages = history.map((m) => {
+      const item: any = { role: m.role, content: m.content };
+      if (m.name) item.name = m.name;
+      if (m.tool_call_id) item.tool_call_id = m.tool_call_id;
+      if (m.tool_calls) item.tool_calls = m.tool_calls;
+      return item;
+    });
+
     try {
       const res = await fetch("/api/playground/chat", {
         method: "POST",
@@ -309,7 +458,7 @@ export default function PlaygroundPage() {
         body: JSON.stringify({
           virtualKey: settings.keyId,
           model: settings.model,
-          messages: [{ role: "user", content: userMsg }],
+          messages: apiMessages,
           stream: true,
           bypass,
         }),
@@ -459,15 +608,19 @@ export default function PlaygroundPage() {
     const userMsg = prompt;
     setPrompt("");
 
-    setMessagesOpti((prev) => [...prev, { role: "user", content: userMsg }]);
-    if (sideBySide) setMessagesCtrl((prev) => [...prev, { role: "user", content: userMsg }]);
+    const userMessageItem: ChatMsg = { role: "user", content: userMsg };
+    const newHistoryOpti = [...messagesOpti, userMessageItem];
+    const newHistoryCtrl = [...messagesCtrl, userMessageItem];
+
+    setMessagesOpti(newHistoryOpti);
+    if (sideBySide) setMessagesCtrl(newHistoryCtrl);
 
     setIsTyping(true);
 
     const promises: Promise<void>[] = [];
     if (opti.keyId) {
       promises.push(streamChat(
-        userMsg, opti, false, setMessagesOpti,
+        newHistoryOpti, opti, false, setMessagesOpti,
         (stats) => {
           setLatencyHistoryOpti((prev) => [...prev.slice(-49), stats.latencyMs || 0]);
           setSavingsHistory((prev) => [...prev.slice(-49), stats.costSaved || 0]);
@@ -476,7 +629,7 @@ export default function PlaygroundPage() {
     }
     if (sideBySide && ctrl.keyId) {
       promises.push(streamChat(
-        userMsg, ctrl, ctrlBypass, setMessagesCtrl,
+        newHistoryCtrl, ctrl, ctrlBypass, setMessagesCtrl,
         (stats) => setLatencyHistoryCtrl((prev) => [...prev.slice(-49), stats.latencyMs || 0])
       ));
     }

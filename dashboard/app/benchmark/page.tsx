@@ -119,9 +119,9 @@ export default function BenchmarkPage() {
                   Every request intercepted in benchmark mode fires <strong className="text-white">3 LLM calls</strong> instead of 1:
                 </p>
                 <ol className="text-sm text-red-200/80 space-y-1 ml-4 mb-3 list-decimal list-inside">
-                  <li><strong className="text-red-300">Control call</strong> — the original request forwarded as-is to the upstream provider</li>
-                  <li><strong className="text-red-300">Optimized call</strong> — the L3-compressed version of the same request</li>
-                  <li><strong className="text-red-300">Judge LLM call</strong> — a third LLM that scores how similar the two responses are (0-100)</li>
+                  <li><strong className="text-red-300">Control call</strong> {"\u2014"} the original request forwarded as-is to the upstream provider</li>
+                  <li><strong className="text-red-300">Optimized call</strong> {"\u2014"} the L3-compressed version of the same request</li>
+                  <li><strong className="text-red-300">Judge LLM call</strong> {"\u2014"} a third LLM that scores how similar the two responses are (0-100)</li>
                 </ol>
                 <div className="bg-black/40 border border-red-500/30 rounded-xl p-3 mt-3">
                   <p className="text-xs text-red-200 leading-relaxed">

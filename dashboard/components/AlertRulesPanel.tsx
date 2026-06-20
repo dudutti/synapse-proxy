@@ -10,14 +10,14 @@ const METRICS = [
   { id: "error_rate",            label: "Upstream error rate",  unit: "%",          defaultThreshold: 5,   defaultOp: "gt",  help: "Upstream 4xx/5xx rate over the rolling window. Persisted as part of upstream_requests_total / upstream_errors_total." },
   { id: "cache_hit_rate",        label: "Cache hit rate",       unit: "%",          defaultThreshold: 30,  defaultOp: "lt",  help: "L1+L2+L3+LOOP hit rate. Persisted from proxy /metrics." },
   { id: "upstream_latency_p95",  label: "Upstream latency p95", unit: "ms",         defaultThreshold: 2000, defaultOp: "gt",  help: "Approximation via the ge_2s bucket: alerts when more than X% of upstream calls take >=2s." },
-  { id: "pricing_gaps",           label: "Pricing gaps",         unit: "models",     defaultThreshold: 0,   defaultOp: "gt",  help: "(provider, model) combos seen in RequestLog but missing from ProviderModel — i.e. requests falling back to $1/MTok." },
+  { id: "pricing_gaps",           label: "Pricing gaps",         unit: "models",     defaultThreshold: 0,   defaultOp: "gt",  help: "(provider, model) combos seen in RequestLog but missing from ProviderModel \u2014 i.e. requests falling back to $1/MTok." },
 ] as const;
 
 const OPS = [
   { id: "gt",  label: ">" },
-  { id: "gte", label: "≥" },
+  { id: "gte", label: "\u2265" },
   { id: "lt",  label: "<" },
-  { id: "lte", label: "≤" },
+  { id: "lte", label: "\u2264" },
 ] as const;
 
 const SEVERITIES = [
@@ -66,7 +66,7 @@ const SEV_ICON: Record<string, React.ReactNode> = {
 };
 
 function fmtTime(iso: string | null): string {
-  if (!iso) return "—";
+  if (!iso) return "\u2014";
   const d = new Date(iso);
   const sec = Math.floor((Date.now() - d.getTime()) / 1000);
   if (sec < 60) return `${sec}s ago`;
@@ -289,9 +289,9 @@ function RuleRow({
           )}
         </div>
         <div className="text-[11px] text-zinc-500 font-mono">
-          {metric?.label || rule.metric} {op?.label} {rule.threshold}{metric?.unit ? ` ${metric.unit}` : ""} · window {rule.windowSec}s
-          {rule.notifyEmail && <span className="ml-2">· email {rule.notifyEmail}</span>}
-          {rule.notifySlack && <span className="ml-2">· slack</span>}
+          {metric?.label || rule.metric} {op?.label} {rule.threshold}{metric?.unit ? ` ${metric.unit}` : ""} {"\u00b7"} window {rule.windowSec}s
+          {rule.notifyEmail && <span className="ml-2">{"\u00b7"} email {rule.notifyEmail}</span>}
+          {rule.notifySlack && <span className="ml-2">{"\u00b7"} slack</span>}
         </div>
       </div>
       <button
@@ -435,7 +435,7 @@ function RuleForm({
             type="url"
             value={notifySlack}
             onChange={(e) => setNotifySlack(e.target.value)}
-            placeholder="https://hooks.slack.com/…"
+            placeholder="https://hooks.slack.com/\u2026"
             className="w-full bg-white/5 border border-white/10 rounded-lg px-3 py-1.5 text-sm text-zinc-200 placeholder-zinc-600 outline-none focus:border-emerald-500/50"
           />
         </div>

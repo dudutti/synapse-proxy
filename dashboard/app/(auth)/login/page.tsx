@@ -167,7 +167,7 @@ function LoginContent() {
               className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-black py-4 rounded-xl transition-all shadow-[0_0_20px_rgba(52,211,153,0.3)] hover:shadow-[0_0_30px_rgba(52,211,153,0.5)] disabled:opacity-50 disabled:hover:bg-emerald-500 flex items-center justify-center gap-2"
             >
               {isLoading ? "Authenticating..." : (
-                <>Sign In <span className="text-lg">→</span></>
+                <>Sign In <span className="text-lg">{"\u2192"}</span></>
               )}
             </button>
           </form>

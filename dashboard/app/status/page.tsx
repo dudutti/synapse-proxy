@@ -83,7 +83,7 @@ export default async function PublicStatusPage() {
             user data is exposed.
           </p>
           <p>
-            Refreshes every 10 seconds · last server fetch just now
+            Refreshes every 10 seconds {"\u00b7"} last server fetch just now
           </p>
         </footer>
       </div>

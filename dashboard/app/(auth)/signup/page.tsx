@@ -170,7 +170,7 @@ export default function SignupPage() {
                 className="w-full bg-emerald-500 hover:bg-emerald-400 text-black font-black py-4 rounded-xl transition-all shadow-[0_0_20px_rgba(52,211,153,0.3)] hover:shadow-[0_0_30px_rgba(52,211,153,0.5)] disabled:opacity-50 disabled:hover:bg-emerald-500 flex items-center justify-center gap-2 mt-4"
               >
                 {isLoading ? "Creating..." : (
-                  <>Create Account <span className="text-lg">→</span></>
+                  <>Create Account <span className="text-lg">{"\u2192"}</span></>
                 )}
               </button>
             </form>

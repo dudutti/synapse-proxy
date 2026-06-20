@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 
 import React, { useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
@@ -329,7 +329,7 @@ export function ServerHealthCard() {
             SUPERADMIN :: Live Telemetry
           </h2>
           <p className="text-zinc-500 text-xs mt-1">
-            Streaming every {REFRESH_MS / 1000}s · proxy + DB aggregates ·{" "}
+            Streaming every {REFRESH_MS / 1000}s {"\u00b7"} proxy + DB aggregates {"\u00b7"}{" "}
             <span className="text-zinc-400">
               {lastFetchDuration !== null ? `${lastFetchDuration.toFixed(0)}ms` : "..."}
             </span>
@@ -439,20 +439,27 @@ export function ServerHealthCard() {
           current={db.totalCostSaved}
         />
         <SparklinePanel
-          label="Tokens saved · last 30 samples"
+          label={"$ saved (DB) \u00b7 last 30 samples"}
+          values={history.costSaved}
+          color="#fbbf24"
+          formatter={(v) => `$${v.toFixed(0)}`}
+          current={db.totalCostSaved}
+        />
+        <SparklinePanel
+          label={"Tokens saved \u00b7 last 30 samples"}
           values={history.tokensSaved}
           color="#a78bfa"
           formatter={(v) => v.toLocaleString()}
           current={db.totalTokensSaved}
         />
         <SparklinePanel
-          label="Requests / hour · last 30 samples"
+          label={"Requests / hour \u00b7 last 30 samples"}
           values={history.requestsPerMin}
           color="#22d3ee"
           current={db.logsLastHour}
         />
         <SparklinePanel
-          label="Upstream errors · last 30 samples"
+          label={"Upstream errors \u00b7 last 30 samples"}
           values={history.upstreamErrors}
           color="#fb7185"
           current={m["synapse_proxy_upstream_errors_total"]?.samples?._total ?? 0}
@@ -547,7 +554,7 @@ export function ServerHealthCard() {
                 return (
                   <BarGauge
                     key={label}
-                    label={label.replace("le_", "< ").replace("ge_", "â‰¥ ")}
+                    label={label.replace("le_", "< ").replace("ge_", "\u2265 ")}
                     value={v}
                     color={
                       label === "le_10ms" || label === "le_100ms"
@@ -672,9 +679,9 @@ function ForecastCard({
     return (
       <div className="p-4 rounded-2xl bg-black/40 border border-white/10">
         <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">
-          {title} · 30-day forecast
+          {title} {"\u00b7"} 30-day forecast
         </div>
-        <div className="text-[11px] text-zinc-600">Not enough data yet (need â‰¥3 samples)</div>
+        <div className="text-[11px] text-zinc-600">Not enough data yet (need {"\u2265"} 3 samples)</div>
       </div>
     );
   }
@@ -692,7 +699,7 @@ function ForecastCard({
   return (
     <div className={`p-4 rounded-2xl border ${cardCls}`}>
       <div className="text-[10px] font-bold uppercase tracking-widest text-zinc-500 mb-2">
-        {title} · 30-day forecast
+        {title} {"\u00b7"} 30-day forecast
       </div>
       <div className="flex items-end justify-between gap-3">
         <div>
@@ -701,13 +708,13 @@ function ForecastCard({
             {unit && <span className="text-xs text-zinc-500 ml-1 font-bold">{unit}</span>}
           </div>
           <div className="text-[10px] text-zinc-500 mt-1">
-            {trendUp ? "↑" : "↓"} {format(Math.abs(proj.slope * horizonSamples))}{unit} trend
+            {trendUp ? "\u2191" : "\u2193"} {format(Math.abs(proj.slope * horizonSamples))}{unit} trend
           </div>
         </div>
         <div className="text-right">
           <div className="text-[9px] uppercase tracking-wider text-zinc-600">95% range</div>
           <div className="text-[11px] font-mono text-zinc-400">
-            {format(proj.bandLow)} ”“ {format(proj.bandHigh)}{unit}
+            {format(proj.bandLow)} {"\u2013"} {format(proj.bandHigh)}{unit}
           </div>
         </div>
       </div>

@@ -80,7 +80,7 @@ export default function Dashboard() {
     sent: { total: 0, input: 0, output: 0 },
     optimized: { total: 0, input: 0, output: 0 }
   });
-  // Auto-refetch token â€” bumped on every poll cycle to force
+  // Auto-refetch token - bumped on every poll cycle to force
   // AnimatedNumber to re-render smoothly without flicker.
   const [pollTick, setPollTick] = useState(0);
   // Hold the active EventSource so we can close it on filter change.
@@ -324,7 +324,7 @@ export default function Dashboard() {
       // headline counters (Total Value Saved, Tokens Sent, etc.) without
       // waiting for the user to change filter. Cheap DB query, ~50ms on
       // the dashboard container. With 1000 users this is 200 req/s on
-      // Postgres â€” fine for a service of this size.
+      // Postgres - fine for a service of this size.
       const pollId = window.setInterval(async () => {
         try {
           const r = await fetch(`/api/analytics?page=${page}&limit=10&days=${daysFilter}${keyQuery}`);
@@ -484,7 +484,7 @@ export default function Dashboard() {
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
               </span>
-              <span>Live · auto-refresh 5s</span>
+              <span>Live {"\u00b7"} auto-refresh 5s</span>
             </div>
             <div className="text-7xl font-black text-transparent bg-clip-text bg-gradient-to-r from-emerald-400 via-teal-300 to-cyan-500 relative z-10">
               <AnimatedNumber
@@ -723,7 +723,7 @@ export default function Dashboard() {
             <div className="flex items-center justify-between mb-6">
               <h3 className="text-sm text-gray-400 uppercase tracking-widest font-bold">Détail des économies (par classe de token)</h3>
               <span
-                title="Les 4 classes de tokens sont pricées différemment. Sur Anthropic, un token cache_read coûte 0.1— l'input standard, donc nos savings par classe peuvent varier de Â±10— selon la composition exacte du payload."
+                title="Les 4 classes de tokens sont pricées différemment. Sur Anthropic, un token cache_read coûte 0.1x de l'input standard, donc nos savings par classe peuvent varier de \u00b110% selon la composition exacte du payload."
                 className="text-[10px] text-gray-500 cursor-help"
               >
                 ℹ️ Comment on calcule
@@ -746,14 +746,14 @@ export default function Dashboard() {
                   <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                     <div className="text-[10px] uppercase tracking-widest text-emerald-500 font-bold mb-1">Cache read</div>
                     <div className="font-mono text-emerald-400 text-sm">${totalSavingsByClass.cacheRead.toFixed(4)}</div>
-                    <div className="text-[10px] text-gray-600 mt-1">cache_hit (0.1— input)</div>
+                    <div className="text-[10px] text-gray-600 mt-1">cache_hit (0.1x input)</div>
                   </div>
                   <div className={`bg-white/5 border ${totalSavingsByClass.cacheCreation < 0 ? 'border-red-500/30' : 'border-white/10'} rounded-xl p-3`}>
                     <div className="text-[10px] uppercase tracking-widest text-orange-400 font-bold mb-1">Cache creation</div>
                     <div className={`font-mono text-sm ${totalSavingsByClass.cacheCreation < 0 ? 'text-red-400' : 'text-orange-400'}`}>
                       {totalSavingsByClass.cacheCreation >= 0 ? '$' : '-$'}{Math.abs(totalSavingsByClass.cacheCreation).toFixed(4)}
                     </div>
-                    <div className="text-[10px] text-gray-600 mt-1">write 1.25-2— input</div>
+                    <div className="text-[10px] text-gray-600 mt-1">write 1.25-2x input</div>
                   </div>
                   <div className="bg-white/5 border border-white/10 rounded-xl p-3">
                     <div className="text-[10px] uppercase tracking-widest text-purple-400 font-bold mb-1">Output</div>
@@ -810,7 +810,7 @@ export default function Dashboard() {
 
                 {/* Honesty caveat */}
                 <div className="mt-4 text-[10px] text-gray-500 leading-relaxed border-t border-white/5 pt-3">
-                  <strong className="text-gray-400">Honnêteté du calcul :</strong> chaque requête est approximée comme suit â€” on connaît le total de tokens input sauvés (promptOrig - promptOpt) et la proportion de cache_read/cache_creation dans le payload ORIGINAL. On applique cette même proportion aux tokens sauvés. <strong>Cache creation peut être négatif</strong> : si L3 a supprimé du texte qui aurait été écrit en cache (coûte 1.25-2— l'input), c'est un gain ; si L3 a invalidé le cache provider en modifiant le payload, c'est une perte.
+                  <strong className="text-gray-400">Honnêteté du calcul :</strong> chaque requête est approximée comme suit {"\u2014"} on connaît le total de tokens input sauvés (promptOrig - promptOpt) et la proportion de cache_read/cache_creation dans le payload ORIGINAL. On applique cette même proportion aux tokens sauvés. <strong>Cache creation peut être négatif</strong> : si L3 a supprimé du texte qui aurait été écrit en cache (coûte 1.25-2x l'input), c'est un gain ; si L3 a invalidé le cache provider en modifiant le payload, c'est une perte.
                 </div>
               </>
             )}
@@ -892,7 +892,7 @@ export default function Dashboard() {
                 <div className="bg-orange-500/5 border border-orange-500/20 rounded-xl p-4">
                   <div className="text-[10px] uppercase tracking-widest text-orange-400 font-bold mb-2">Opportunité (à activer)</div>
                   <div className="text-xs text-gray-400">
-                    Providers avec cache_read &gt; 4— cache_creation (risque L3 d'invalider le prefix) :
+                    Providers avec cache_read &gt; 4x cache_creation (risque L3 d'invalider le prefix) :
                     <div className="mt-1 font-mono text-orange-300">
                       {opportunitySavings.highCacheReadProviders.join(', ')}
                     </div>
@@ -907,7 +907,7 @@ export default function Dashboard() {
             {/* Honesty caveats */}
             <div className="mt-4 text-[10px] text-gray-500 leading-relaxed border-t border-white/5 pt-3">
               <strong className="text-gray-400">Comment on calcule ce chiffre :</strong> Les valeurs ci-dessus mesurent ce qu'Synapse Proxy a effectivement économisé (cache L1/L2 + compression L3).
-              Le prix réel d'un token cache_read est 0.1— l'input standard (Anthropic), donc les économies affichées sur des workloads à fort cache_read sont <strong>surestimées</strong> par le pricing actuel.
+              Le prix réel d'un token cache_read est 0.1x de l'input standard (Anthropic), donc les économies affichées sur des workloads à fort cache_read sont <strong>surestimées</strong> par le pricing actuel.
               Le L3 peut augmenter le coût net sur des workloads Anthropic multi-turn en invalidant leur cache prompt. Sur abonnement flat, ces valeurs représentent de la capacité libérée, pas un remboursement.
               {cacheHitRateByProvider && Object.values(cacheHitRateByProvider).some(r => r === -1) && (
                 <span className="block mt-1 text-yellow-500">
@@ -948,7 +948,7 @@ export default function Dashboard() {
               </p>
               <p>
                 <span className="text-zinc-300 font-bold">Upstream cost:</span>{" "}
-                <span className="text-emerald-300">unchanged</span> â€” the
+                <span className="text-emerald-300">unchanged</span> {"\u2014"} the
                 session recording tag is free. No extra requests are
                 fired to your provider.
               </p>

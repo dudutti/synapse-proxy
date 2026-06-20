@@ -1,4 +1,4 @@
-﻿"use client";
+"use client";
 import { useMemo, useState, useEffect, useRef, useCallback } from "react";
 
 // Shape of a single live telemetry row, matches the payload emitted by
@@ -169,7 +169,7 @@ function buildGroups(records: LiveRequest[], by: GroupBy): Group[] {
             ? first?.agentLabel || key
             : by === "session"
             ? first?.sessionId
-              ? `Session ${first.sessionId.slice(0, 12)}${first.sessionId.length > 12 ? "…" : ""}`
+              ? `Session ${first.sessionId.slice(0, 12)}${first.sessionId.length > 12 ? "\u2026" : ""}`
               : key
             : key,
         icon: by === "agent" ? iconFor(key) : by === "session" ? "🧵" : "🧠",
@@ -501,7 +501,7 @@ export function LiveTelemetryGrouped({ records, initialGroupBy = "agent", onSnap
                   </span>
                 )}
                 <span className="text-xs text-zinc-500">
-                  {g.records.length} req · {g.tokensSaved.toLocaleString()} tok saved ·{" "}
+                  {g.records.length} req {"\u00b7"} {g.tokensSaved.toLocaleString()} tok saved {"\u00b7"}{" "}
                   <span className="text-emerald-300">${estimateCostSaved(g.tokensSaved).toFixed(4)}</span>
                 </span>
                 {g.cacheHitRate > 0 && (
@@ -699,7 +699,7 @@ function PaginationBar({
   return (
     <div className="mt-2 flex flex-shrink-0 flex-wrap items-center justify-between gap-2 rounded-lg border border-white/10 bg-black/60 px-3 py-2 text-xs text-zinc-400 backdrop-blur">
       <div>
-        Showing <span className="text-zinc-200">{start}”“{end}</span> of{" "}
+        Showing <span className="text-zinc-200">{start}{"\u2013"}{end}</span> of{" "}
         <span className="text-zinc-200">{totalGroups}</span> groups
       </div>
       <div className="flex items-center gap-1">
@@ -709,18 +709,18 @@ function PaginationBar({
           className="rounded px-2 py-1 hover:bg-white/5 disabled:opacity-30"
           title="First page"
         >
-          «
+          {"\u00ab"}
         </button>
         <button
           onClick={() => onPageChange(Math.max(1, page - 1))}
           disabled={page === 1}
           className="rounded px-2 py-1 hover:bg-white/5 disabled:opacity-30"
         >
-          ”¹ Prev
+          {"\u2039"} Prev
         </button>
         {pageNumbers.map((p, i) =>
-          p === "…" ? (
-            <span key={`gap-${i}`} className="px-1 text-zinc-600">…</span>
+          p === "\u2026" ? (
+            <span key={`gap-${i}`} className="px-1 text-zinc-600">{"\u2026"}</span>
           ) : (
             <button
               key={p}
@@ -740,7 +740,7 @@ function PaginationBar({
           disabled={page === totalPages}
           className="rounded px-2 py-1 hover:bg-white/5 disabled:opacity-30"
         >
-          Next ”º
+          Next {"\u203a"}
         </button>
         <button
           onClick={() => onPageChange(totalPages)}
@@ -748,7 +748,7 @@ function PaginationBar({
           className="rounded px-2 py-1 hover:bg-white/5 disabled:opacity-30"
           title="Last page"
         >
-          »
+          {"\u00bb"}
         </button>
       </div>
       <div className="flex items-center gap-1">
@@ -858,7 +858,7 @@ function GroupBody({ records, onDiff }: { records: LiveRequest[]; onDiff: (r: Li
       {totalPages > 1 && (
         <div className="flex items-center justify-between gap-2 border-t border-white/5 bg-black/20 px-4 py-1.5 text-[11px] text-zinc-400">
           <span>
-            Showing <span className="text-zinc-200">{start + 1}”“{Math.min(start + GROUP_PAGE_SIZE, records.length)}</span> of {records.length}
+            Showing <span className="text-zinc-200">{start + 1} {"\u2013"} {Math.min(start + GROUP_PAGE_SIZE, records.length)}</span> of {records.length}
           </span>
           <div className="flex items-center gap-1">
             <button
@@ -866,7 +866,7 @@ function GroupBody({ records, onDiff }: { records: LiveRequest[]; onDiff: (r: Li
               disabled={safePage === 1}
               className="rounded px-2 py-0.5 hover:bg-white/5 disabled:opacity-30"
             >
-              ”¹ Prev
+              {"\u2039"} Prev
             </button>
             <span className="px-1 text-zinc-500">
               {safePage} / {totalPages}
@@ -876,7 +876,7 @@ function GroupBody({ records, onDiff }: { records: LiveRequest[]; onDiff: (r: Li
               disabled={safePage === totalPages}
               className="rounded px-2 py-0.5 hover:bg-white/5 disabled:opacity-30"
             >
-              Next ”º
+              Next {"\u203a"}
             </button>
           </div>
         </div>
@@ -1164,7 +1164,7 @@ function DiffModal({ record, onClose }: { record: LiveRequest; onClose: () => vo
           </div>
           <div>
             <div className="text-zinc-500">Agent</div>
-            <div className="text-zinc-200">{record.agentLabel || record.agentId || "””"}</div>
+            <div className="text-zinc-200">{record.agentLabel || record.agentId || "\u2014"}</div>
           </div>
           <div>
             <div className="text-zinc-500">Tour</div>
@@ -1175,7 +1175,7 @@ function DiffModal({ record, onClose }: { record: LiveRequest; onClose: () => vo
                   <span className="text-zinc-500 ml-1">/{record.turnCount + 1}</span>
                 </span>
               ) : (
-                <span className="text-zinc-500">—</span>
+                <span className="text-zinc-500">{"\u2014"}</span>
               )}
             </div>
           </div>
@@ -1209,7 +1209,7 @@ function DiffModal({ record, onClose }: { record: LiveRequest; onClose: () => vo
 
         {loading && (
           <div className="flex-1 flex items-center justify-center text-zinc-500 text-sm">
-            Loading payloads…
+            Loading payloads{"\u2026"}
           </div>
         )}
 
@@ -1242,7 +1242,7 @@ function DiffModal({ record, onClose }: { record: LiveRequest; onClose: () => vo
                   className="rounded border border-white/10 px-2 py-1 text-xs text-zinc-300 hover:bg-white/5"
                   title={
                     (fullLog as any).payloadsTruncated?.original
-                      ? `Full payload is ${((fullLog as any).payloadsTruncated?.originalFullLength / 1024).toFixed(1)} KB ”” only the first 100 KB are shown above.`
+                      ? `Full payload is ${((fullLog as any).payloadsTruncated?.originalFullLength / 1024).toFixed(1)} KB \u2014 only the first 100 KB are shown above.`
                       : "Download full original payload"
                   }
                 >
@@ -1260,7 +1260,7 @@ function DiffModal({ record, onClose }: { record: LiveRequest; onClose: () => vo
                   className="rounded border border-white/10 px-2 py-1 text-xs text-zinc-300 hover:bg-white/5"
                   title={
                     (fullLog as any).payloadsTruncated?.optimized
-                      ? `Full payload is ${((fullLog as any).payloadsTruncated?.optimizedFullLength / 1024).toFixed(1)} KB ”” only the first 100 KB are shown above.`
+                      ? `Full payload is ${((fullLog as any).payloadsTruncated?.optimizedFullLength / 1024).toFixed(1)} KB \u2014 only the first 100 KB are shown above.`
                       : "Download full optimized payload"
                   }
                 >

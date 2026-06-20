@@ -126,7 +126,7 @@ export function PricingCoveragePanel() {
             </button>
           )}
           <div className="text-[10px] text-zinc-500 font-mono whitespace-nowrap">
-            {knownCount} priced · {gaps.length} unpriced · {totalRequests.toLocaleString()} reqs · ~${totalFallback.toFixed(4)} at fallback
+            {knownCount} priced {"\u00b7"} {gaps.length} unpriced {"\u00b7"} {totalRequests.toLocaleString()} reqs {"\u00b7"} ~${totalFallback.toFixed(4)} at fallback
           </div>
         </div>
       </div>
@@ -140,7 +140,7 @@ export function PricingCoveragePanel() {
       ) : (
         <div className="divide-y divide-white/5">
           {loading && gaps.length === 0 ? (
-            <div className="px-4 py-6 text-center text-zinc-500 text-xs">Loading…</div>
+            <div className="px-4 py-6 text-center text-zinc-500 text-xs">Loading{"\u2026"}</div>
           ) : (
             gaps.map((g) => (
               <GapRow
@@ -202,7 +202,7 @@ function GapRow({
             {gap.provider}
           </span>
           <span className="text-[10px] text-zinc-500 font-mono">
-            · {gap.requestCount.toLocaleString()} reqs · {gap.totalTokens.toLocaleString()} tokens
+            {"\u00b7"} {gap.requestCount.toLocaleString()} reqs {"\u00b7"} {gap.totalTokens.toLocaleString()} tokens
           </span>
         </div>
         <div className="text-[11px] text-amber-300/80 font-mono">
@@ -359,7 +359,7 @@ function FixModal({
               disabled={submitting}
               className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/30 disabled:opacity-50"
             >
-              {submitting ? "Saving…" : "Save pricing"}
+              {submitting ? "Saving\u2026" : "Save pricing"}
               <ArrowRight className="w-3 h-3" />
             </button>
           </div>

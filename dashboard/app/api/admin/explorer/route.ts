@@ -48,6 +48,9 @@ export async function GET(req: NextRequest) {
   const model = sp.get("model")?.trim();
   if (model) where.model = model;
 
+  const sessionId = sp.get("sessionId")?.trim();
+  if (sessionId) where.sessionId = sessionId;
+
   const provider = sp.get("provider")?.trim();
   if (provider) where.provider = provider;
 

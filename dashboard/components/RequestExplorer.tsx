@@ -2,7 +2,8 @@
 
 import React, { useEffect, useState, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Search, ChevronLeft, ChevronRight, X, FileCode2, Eye, Clock, Hash, Database, Filter as FilterIcon, RotateCcw } from "lucide-react";
+import { Search, ChevronLeft, ChevronRight, X, FileCode2, Eye, Clock, Hash, Database, Filter as FilterIcon, RotateCcw, Sparkles } from "lucide-react";
+import { useSearchParams, useRouter } from "next/navigation";
 
 // Query state is just a plain object — we serialise to query string in
 // the useEffect that fetches.
@@ -17,6 +18,7 @@ type Query = {
   virtualKey: string;
   from: string;
   to: string;
+  sessionId: string;
 };
 
 const EMPTY: Query = {
@@ -30,6 +32,7 @@ const EMPTY: Query = {
   virtualKey: "",
   from: "",
   to: "",
+  sessionId: "",
 };
 
 type Row = {
@@ -73,7 +76,11 @@ function fmtNum(n: number): string {
 }
 
 export function RequestExplorer() {
-  const [q, setQ] = useState<Query>(EMPTY);
+  const searchParams = useSearchParams();
+  const [q, setQ] = useState<Query>(() => ({
+    ...EMPTY,
+    sessionId: searchParams?.get("sessionId") || "",
+  }));
   const [page, setPage] = useState(1);
   const [rows, setRows] = useState<Row[]>([]);
   const [agg, setAgg] = useState<Aggregate>({ count: 0, tokensSaved: 0, totalCostSaved: 0 });
@@ -95,6 +102,7 @@ export function RequestExplorer() {
     if (q.virtualKey) sp.set("virtualKey", q.virtualKey);
     if (q.from) sp.set("from", q.from);
     if (q.to) sp.set("to", q.to);
+    if (q.sessionId) sp.set("sessionId", q.sessionId);
     sp.set("page", String(page));
     sp.set("limit", "50");
     return sp.toString();
@@ -138,9 +146,9 @@ export function RequestExplorer() {
               Request Explorer
             </h2>
             <span className="text-[10px] text-zinc-500 font-mono">
-              {total} matches · {fmtNum(agg.tokensSaved)} tokens saved · ${agg.totalCostSaved.toFixed(4)} total
+              {total} matches {"\u00b7"} {fmtNum(agg.tokensSaved)} tokens saved {"\u00b7"} ${agg.totalCostSaved.toFixed(4)} total
               {lastFetchMs !== null && (
-                <span className="text-zinc-600 ml-2">· {lastFetchMs.toFixed(0)}ms</span>
+                <span className="text-zinc-600 ml-2">{"\u00b7"} {lastFetchMs.toFixed(0)}ms</span>
               )}
             </span>
           </div>
@@ -161,8 +169,9 @@ export function RequestExplorer() {
           <FilterInput icon={<FilterIcon className="w-3 h-3" />} label="Cache levels" value={q.level} onChange={(v) => { setQ({ ...q, level: v }); setPage(1); }} placeholder="L1,L2,NONE" />
           <FilterInput icon={<Hash className="w-3 h-3" />} label="Min tokens" value={q.minTokens} onChange={(v) => { setQ({ ...q, minTokens: v }); setPage(1); }} placeholder="1000" type="number" />
           <FilterInput icon={<Clock className="w-3 h-3" />} label="Min duration (ms)" value={q.minDuration} onChange={(v) => { setQ({ ...q, minDuration: v }); setPage(1); }} placeholder="2000" type="number" />
-          <FilterInput icon={<Hash className="w-3 h-3" />} label="Virtual key prefix" value={q.virtualKey} onChange={(v) => { setQ({ ...q, virtualKey: v }); setPage(1); }} placeholder="sk-opti-..." />
+                  <FilterInput icon={<Hash className="w-3 h-3" />} label="Virtual key prefix" value={q.virtualKey} onChange={(v) => { setQ({ ...q, virtualKey: v }); setPage(1); }} placeholder="sk-opti-..." />
           <FilterInput icon={<Clock className="w-3 h-3" />} label="From (ISO)" value={q.from} onChange={(v) => { setQ({ ...q, from: v }); setPage(1); }} placeholder="2026-06-15T00:00:00Z" />
+          <FilterInput icon={<Search className="w-3 h-3" />} label="Session ID" value={q.sessionId} onChange={(v) => { setQ({ ...q, sessionId: v }); setPage(1); }} placeholder="sess_..." />
         </div>
       </div>
 
@@ -185,7 +194,7 @@ export function RequestExplorer() {
           <tbody className="divide-y divide-white/[0.04]">
             {loading && rows.length === 0 && (
               <tr>
-                <td colSpan={9} className="px-3 py-6 text-center text-zinc-500">Loading…</td>
+                <td colSpan={9} className="px-3 py-6 text-center text-zinc-500">Loading{"\u2026"}</td>
               </tr>
             )}
             {!loading && rows.length === 0 && (
@@ -201,16 +210,16 @@ export function RequestExplorer() {
                     {r.cacheLevel || "MISS"}
                   </span>
                 </td>
-                <td className="px-3 py-1.5 text-zinc-200 truncate max-w-[200px]">{r.model || "—"}</td>
-                <td className="px-3 py-1.5 text-zinc-400 truncate max-w-[180px]">{r.agentLabel || r.agentId || "—"}</td>
+                <td className="px-3 py-1.5 text-zinc-200 truncate max-w-[200px]">{r.model || "\u2014"}</td>
+                <td className="px-3 py-1.5 text-zinc-400 truncate max-w-[180px]">{r.agentLabel || r.agentId || "\u2014"}</td>
                 <td className="px-3 py-1.5 text-right text-zinc-300 tabular-nums">
-                  {fmtNum(r.promptTokensOrig)}<span className="text-zinc-600"> → </span>{fmtNum(r.promptTokensOpt)}
+                  {fmtNum(r.promptTokensOrig)}<span className="text-zinc-600"> {"\u2192"} </span>{fmtNum(r.promptTokensOpt)}
                 </td>
                 <td className="px-3 py-1.5 text-right text-zinc-300 tabular-nums">
-                  {fmtNum(r.completionTokensOrig)}<span className="text-zinc-600"> → </span>{fmtNum(r.completionTokensOpt)}
+                  {fmtNum(r.completionTokensOrig)}<span className="text-zinc-600"> {"\u2192"} </span>{fmtNum(r.completionTokensOpt)}
                 </td>
                 <td className="px-3 py-1.5 text-right text-zinc-400 tabular-nums">
-                  {r.durationMs != null ? `${r.durationMs}ms` : "—"}
+                  {r.durationMs != null ? `${r.durationMs}ms` : "\u2014"}
                 </td>
                 <td className="px-3 py-1.5 text-right text-emerald-400 tabular-nums font-bold">
                   ${r.costSaved.toFixed(5)}
@@ -299,6 +308,7 @@ function FilterInput({
 
 // Slide-in drawer from the right with the full row + payload preview.
 function RequestDetailDrawer({ id, onClose }: { id: string; onClose: () => void }) {
+  const router = useRouter();
   const [row, setRow] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<"summary" | "original" | "optimized" | "response">("summary");
@@ -346,7 +356,7 @@ function RequestDetailDrawer({ id, onClose }: { id: string; onClose: () => void 
         </div>
 
         {loading && (
-          <div className="p-6 text-zinc-500 text-sm">Loading…</div>
+          <div className="p-6 text-zinc-500 text-sm">Loading{"\u2026"}</div>
         )}
         {!loading && !row && (
           <div className="p-6 text-zinc-500 text-sm">Row not found.</div>
@@ -363,10 +373,18 @@ function RequestDetailDrawer({ id, onClose }: { id: string; onClose: () => void 
               {row.sessionId && <Pill k="Session" v={row.sessionId} />}
             </div>
 
+            <button
+              type="button"
+              onClick={() => router.push(`/playground?forkRequestId=${row.id}`)}
+              className="w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-black font-black text-xs transition-all shadow-lg shadow-emerald-500/10"
+            >
+              <Sparkles className="w-3.5 h-3.5" /> Fork this step in Playground
+            </button>
+
             <div className="grid grid-cols-2 gap-2 text-xs">
-              <Stat label="Tokens in" value={`${fmtNum(row.promptTokensOrig)} → ${fmtNum(row.promptTokensOpt)}`} />
-              <Stat label="Tokens out" value={`${fmtNum(row.completionTokensOrig)} → ${fmtNum(row.completionTokensOpt)}`} />
-              <Stat label="Latency" value={row.durationMs != null ? `${row.durationMs}ms` : "—"} />
+              <Stat label="Tokens in" value={`${fmtNum(row.promptTokensOrig)} \u2192 ${fmtNum(row.promptTokensOpt)}`} />
+              <Stat label="Tokens out" value={`${fmtNum(row.completionTokensOrig)} \u2192 ${fmtNum(row.completionTokensOpt)}`} />
+              <Stat label="Latency" value={row.durationMs != null ? `${row.durationMs}ms` : "\u2014"} />
               <Stat label="$ saved" value={`$${Number(row.costSaved).toFixed(5)}`} accent />
               <Stat label="Cache read" value={fmtNum(row.cacheReadTokens ?? 0)} />
               <Stat label="Cache write" value={fmtNum(row.cacheCreationTokens ?? 0)} />
