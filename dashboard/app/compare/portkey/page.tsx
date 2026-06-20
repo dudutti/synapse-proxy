@@ -1,0 +1,124 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { Layers, Play, Check } from "lucide-react";
+import DemoVideo from "@/components/DemoVideo";
+import HeaderNav from "@/components/HeaderNav";
+import Footer from "@/components/Footer";
+import { cookies } from "next/headers";
+import ParticleBackground from "@/components/ParticleBackground";
+import StructuredData from "@/components/StructuredData";
+import { getTranslation, Language } from "@/lib/translations";
+
+export async function generateMetadata(): Promise<Metadata> {
+  const cookieStore = cookies();
+  const lang = (cookieStore.get("lang")?.value as Language) || "fr";
+  const t = await getTranslation("portkey", lang);
+  return {
+    title: t.metaTitle,
+    description: t.metaDesc,
+  };
+}
+
+export default async function ComparePortkeyPage() {
+  const cookieStore = cookies();
+  const lang = (cookieStore.get("lang")?.value as Language) || "fr";
+  const t = await getTranslation("portkey", lang);
+
+  return (
+    <div className="min-h-screen bg-[#050505] text-white font-sans relative overflow-hidden p-8 lg:p-16">
+      <StructuredData />
+      <ParticleBackground />
+      
+      {/* MASSIVE WATERMARK LOGO */}
+      <div className="absolute inset-0 pointer-events-none opacity-[0.05] z-0 flex items-center justify-center overflow-hidden">
+        <img src="/logo01.png" alt="Watermark" className="w-full h-full object-cover max-w-[800px] max-h-[800px] opacity-40 drop-shadow-[0_0_100px_rgba(52,211,153,0.3)] scale-110" />
+      </div>
+
+      <div className="absolute top-[-10%] left-[-10%] w-[50%] h-[50%] bg-blue-500/10 rounded-full blur-[120px] pointer-events-none" />
+      <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-purple-500/10 rounded-full blur-[120px] pointer-events-none" />
+
+      <div className="max-w-6xl mx-auto relative z-10">
+        {/* Floating Header Navbar */}
+        <header className="w-full border border-white/10 bg-[#050505]/40 backdrop-blur-md flex items-center justify-between py-4 px-8 z-50 mb-12 rounded-2xl">
+          <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
+            <div className="w-8 h-8 rounded-full bg-[#0f0f11] border border-white/10 ring-1 ring-emerald-500/20 overflow-hidden flex items-center justify-center">
+              <img src="/logo01.png" alt="Synapse Proxy Icon" className="w-[150%] h-[150%] object-cover max-w-none translate-y-1" />
+            </div>
+            <span className="font-bold tracking-tight text-white">Synapse Proxy</span>
+          </Link>
+          
+          <HeaderNav />
+          
+          <div className="flex items-center gap-3">
+            <Link href="/" className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 transition-all text-xs font-bold text-black shadow-[0_0_15px_rgba(16,185,129,0.2)]">
+              {t.dashboardBtn}
+            </Link>
+          </div>
+        </header>
+
+        {/* Hero */}
+        <div className="text-center mb-16">
+          <div className="w-16 h-16 mx-auto rounded-2xl bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400 mb-6 shadow-[0_0_30px_rgba(59,130,246,0.2)]">
+            <Layers className="w-8 h-8" />
+          </div>
+          <h1 className="text-4xl lg:text-6xl font-black tracking-tight text-transparent bg-clip-text bg-gradient-to-r from-blue-400 via-purple-300 to-blue-500 mb-6">
+            {t.heroTitle}
+          </h1>
+          <p className="text-gray-400 text-lg lg:text-xl max-w-3xl mx-auto leading-relaxed">
+            {t.heroDesc}
+          </p>
+        </div>
+
+        {/* Feature Comparison Table */}
+        {t.table && (
+          <div className="bg-[#0f0f11]/60 border border-white/5 rounded-3xl p-8 backdrop-blur-xl mb-16 overflow-x-auto shadow-2xl">
+            <table className="w-full text-left border-collapse min-w-[500px]">
+              <thead>
+                <tr className="border-b border-white/10 text-xs uppercase tracking-wider text-gray-400">
+                  <th className="pb-4">{t.table.headers[0]}</th>
+                  <th className="pb-4 text-blue-400 font-bold">{t.table.headers[1]}</th>
+                  <th className="pb-4 text-gray-500">{t.table.headers[2]}</th>
+                </tr>
+              </thead>
+              <tbody className="text-sm divide-y divide-white/5">
+                {t.table.rows.map((row, idx) => (
+                  <tr key={idx}>
+                    <td className="py-4 font-medium text-gray-200">{row.feature}</td>
+                    <td className="py-4 text-blue-400 font-bold flex items-center gap-1.5">
+                      <Check className="w-4 h-4" /> {row.synapse}
+                    </td>
+                    <td className="py-4 text-gray-500">{row.other}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+
+        {/* Video Demo */}
+        <div className="bg-[#0f0f11]/40 border border-white/5 rounded-3xl p-8 shadow-2xl relative overflow-hidden mb-16">
+          <div className="absolute top-0 left-0 w-64 h-64 bg-blue-500/5 rounded-full blur-[100px] pointer-events-none" />
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 items-center">
+            <div>
+              <h3 className="text-2xl font-bold mb-4 flex items-center gap-2">
+                <Play className="w-6 h-6 text-blue-400" /> {t.videoTitle}
+              </h3>
+              <p className="text-gray-400 text-sm leading-relaxed mb-6">
+                {t.videoDesc}
+              </p>
+              <div className="bg-black/40 border border-white/5 rounded-xl p-4 text-xs font-mono text-gray-300">
+                {t.videoConsoleItems?.map((item, i) => (
+                  <div key={i}>{item}</div>
+                ))}
+              </div>
+            </div>
+            <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-black/60 aspect-video flex items-center justify-center">
+              <DemoVideo src="/multi_key_management.webp" alt={t.videoAlt} />
+            </div>
+          </div>
+        </div>
+      </div>
+      <Footer />
+    </div>
+  );
+}

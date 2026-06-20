@@ -11,6 +11,7 @@ import { LogOut, Settings, Activity, Sparkles, Database, Clock, Info, PlayCircle
 import ParticleBackground from "@/components/ParticleBackground";
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
 import { LiveTelemetryGrouped, LiveRequest } from "@/components/LiveTelemetryGrouped";
+import HeaderNav from "@/components/HeaderNav";
 
 const formatJSON = (payload: string) => {
   if (!payload) return "";
@@ -357,7 +358,7 @@ export default function Dashboard() {
     }
   }, [status, page, daysFilter, selectedKey]);
 
-  if (status === "loading") {
+  if (status === "loading" || status === "unauthenticated") {
     return <div className="min-h-screen flex items-center justify-center bg-[#050505] text-white">Loading...</div>;
   }
 
@@ -402,7 +403,7 @@ export default function Dashboard() {
         animate="show"
         className="max-w-7xl mx-auto relative z-10"
       >
-        <motion.header variants={itemVars} className="mb-10 flex justify-between items-center bg-white/5 border border-white/10 p-6 rounded-2xl backdrop-blur-xl shadow-2xl">
+        <motion.header variants={itemVars} className="mb-10 flex justify-between items-center bg-white/5 border border-white/10 p-6 rounded-2xl backdrop-blur-xl shadow-2xl relative z-50">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-full bg-[#0f0f11] border border-white/10 shadow-[0_0_20px_rgba(52,211,153,0.4)] ring-1 ring-emerald-500/30 overflow-hidden flex items-center justify-center">
               {/* Translate-y moves the image physically down to center the icon */}
@@ -413,6 +414,9 @@ export default function Dashboard() {
               <p className="text-gray-400 text-sm">{session?.user?.email}</p>
             </div>
           </div>
+
+          <HeaderNav />
+
           <div className="flex gap-3 items-center">
             <button 
               onClick={handleRecordToggle}

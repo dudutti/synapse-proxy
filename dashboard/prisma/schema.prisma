@@ -234,3 +234,15 @@ model StripePlan {
   updatedAt DateTime @updatedAt
 }
 
+model LandingPageContent {
+  id        String   @id @default(cuid())
+  pageKey   String   // e.g. "caching", "firewall", "cgv", "privacy", "legal"
+  lang      String   // "fr" or "en"
+  content   String   @db.Text // JSON structure
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([pageKey, lang])
+}
+
+

@@ -2,7 +2,7 @@ import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { redirect } from "next/navigation";
 import Link from "next/link";
-import { Users, Database, Settings, ShieldAlert, FileText, Mail, CreditCard } from "lucide-react";
+import { Users, Database, Settings, ShieldAlert, FileText, Mail, CreditCard, Edit } from "lucide-react";
 
 export default async function AdminLayout({
   children,
@@ -36,6 +36,9 @@ export default async function AdminLayout({
           </Link>
           <Link href="/admin/prospects" className="flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-colors text-sm text-gray-300 hover:text-white">
             <FileText className="w-5 h-5" /> Waitlist
+          </Link>
+          <Link href="/admin/content" className="flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-colors text-sm text-gray-300 hover:text-white">
+            <Edit className="w-5 h-5 text-emerald-400" /> Gestion Contenu
           </Link>
           <Link href="/admin/pricing" className="flex items-center gap-3 p-3 rounded-xl hover:bg-white/5 transition-colors text-sm text-gray-300 hover:text-white">
             <Database className="w-5 h-5" /> Model Pricing

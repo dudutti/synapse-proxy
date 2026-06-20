@@ -1,0 +1,101 @@
+# Synapse Proxy - Full Technical Specification
+
+Synapse Proxy is a high-performance network reverse proxy and gateway engineered specifically for large language model (LLM) workflows. It intercepts outbound LLM API requests at the TCP/HTTP layer to optimize latency, control costs, and enforce safety boundaries.
+
+---
+
+## 1. System Architecture
+
+The proxy acts as an intermediary between client applications (running standard SDKs) and upstream providers (OpenAI, Anthropic, Gemini, DeepSeek, self-hosted LLMs).
+
+```
+[Client App / SDK] -> [Synapse Proxy] -> [Upstream Providers (OpenAI/Anthropic)]
+                            |
+         +------------------+------------------+
+         |                                     |
+    [Redis VSS] (L1/L2 Cache)            [ONNX Embedder] (MiniLM-L6-v2)
+```
+
+### Caching Engines
+1. **L1 Cache (Exact Match)**:
+   - Computes a SHA-256 hash of the sanitized request payload (system prompts, user prompts, messages, temperature, tools, model).
+   - If found in Redis, returns the cached completion in under 5ms, avoiding any API charges.
+2. **L2 Cache (Local Semantic Match)**:
+   - Uses an on-premise ONNX runtime running the `all-MiniLM-L6-v2` embedding model to generate a 384-dimensional dense vector of the latest user turn.
+   - Performs a vector similarity search (using Cosine or L2 metric) against previous queries stored in Redis VSS.
+   - If the similarity is above the configurable `semanticTolerance` threshold (default `0.15`), the cached response is returned.
+3. **L3 Cache (Context Compression)**:
+   - Evaluates token attention weights to prune filler phrases, redundant chat history, and boilerplate guidelines.
+   - Compresses prompt tokens by 30% to 50% dynamically before sending them upstream, lowering costs and latency (TTFT).
+
+---
+
+## 2. Agentic Firewall
+
+Designed to govern autonomous AI agents that make continuous, loop-based tool calls.
+
+### Loop Detection & Auto-Recovery
+- Monitors repeated identical tool invocations (same tool name and arguments).
+- If an agent retries the same tool call with the same inputs 3 times within 30 seconds (often due to parsing errors or environment state bugs), Synapse Proxy intercepts the 3rd request.
+- Instead of forwarding it to the LLM, the firewall injects an auto-recovery system instruction:
+  *"System: You have called tool X with the same arguments 3 times. This indicates a loop. Please modify your parameters or try a different approach."*
+- This forces the agent's neural weights to pivot and recover from the loop, saving thousands of dollars in runaway api loops.
+
+### Whitelisting & PII Redaction
+- Enforces a strict allowed function signature list per API key.
+- Redacts sensitive credentials, email addresses, names, and PII patterns on-the-fly from incoming prompts and outgoing response payloads.
+
+---
+
+## 3. Deployment and Setup
+
+### Prerequisites
+- Docker & Docker Compose
+- PostgreSQL (database)
+- Redis Stack Server (for Search and Vector DB capabilities)
+
+### Docker Compose Example
+```yaml
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: optitoken
+      POSTGRES_PASSWORD: password123
+      POSTGRES_DB: optitoken_db
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis/redis-stack-server:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+  proxy:
+    image: synapse-proxy/engine:latest
+    ports:
+      - "8080:8080"
+    environment:
+      - REDIS_ADDR=redis:6379
+      - DATABASE_URL=postgresql://optitoken:password123@postgres:5432/optitoken_db?sslmode=disable
+    depends_on:
+      - redis
+      - postgres
+```
+
+---
+
+## 4. MCP Tools List
+
+The built-in Model Context Protocol (MCP) server exposes the following tools to Claude/Cursor:
+1. `synapse_list_keys`: Retrieve all virtual keys.
+2. `synapse_create_key`: Provision a new key with specified budgets and caching levels.
+3. `synapse_update_key`: Adjust semantic tolerance, budget, or whitelisted tools.
+4. `synapse_get_cache_stats`: Analyze L1/L2/L3 hit ratios and savings.
+5. `synapse_purge_cache`: Evict cache records.
+6. `synapse_get_logs`: Read telemetric logs.
+7. `synapse_kill_key`: Instantly block a key's outbound access.
