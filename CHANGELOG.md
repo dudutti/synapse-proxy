@@ -6,12 +6,7 @@ All notable changes to **Synapse Proxy** are documented here. The format follows
 
 
 
-> **Two products** ship from this repository:
-
-> - **Synapse Proxy** "” open-source under MIT, in `proxy/`
-
-> - **Synapse Proxy Dashboard** "” closed-source SaaS at [synapse-proxy.com](https://synapse-proxy.com), not in this repo. Dashboard changes are listed here when they require proxy-side changes.
-
+> **Open Source Project**: Both **Synapse Proxy** and its **Dashboard** are now fully open-source. While you are free to self-host and customize them for your own team or personal use, we politely ask that you do not sell, resell, or commercialize this product under a competing paid subscription model.
 
 
 ## [Unreleased]
