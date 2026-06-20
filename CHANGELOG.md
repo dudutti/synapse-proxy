@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 
 
@@ -19,6 +19,20 @@ All notable changes to **Synapse Proxy** are documented here. The format follows
 
 
 ### Added
+
+- **SaaS Stripe Billing & Subscription Tiers**: Implemented dynamic pricing maps (Hobby Free 10M tokens, Pro €5/mo 20M tokens, Scale €15/mo 100M tokens) with Stripe checkout flow and robust webhook syncing (`checkout.session.completed`, `customer.subscription.updated`, `customer.subscription.deleted`).
+
+- **Real-Time Proxy Token Tracking**: Telemetry worker now increments users' monthly token consumption in Postgres on each request log, dynamically toggling the `limit_exceeded` status in Redis when tier limits are breached.
+
+- **Superadmin Plans CRUD & User Override Panels**: Created `/admin/plans` mapping dashboard and upgraded `/admin/users` to allow superadmins to manually change user tiers and reset token limits.
+
+- **Dynamic Billing Settings UI**: Upgraded `/settings` to display live plans from the database, track monthly token quotas with an interactive progress bar, and trigger checkout upgrades.
+
+- **Native CGO Go/Rust Embedding Engine**: Statically linked a Rust-based MiniLM embedder via CGO, replacing the external Python `onnx-embedder` API to eliminate inter-container latency and save ~1GB of server memory.
+
+- **Sandbox Session Forking**: Added a "Fork in Playground" capability to the Request Explorer drawer to clone any conversation context directly into the Playground for debugging.
+
+- **Unicode Encoding Standardisation**: Standardised unicode characters as JSX escapes (`\u...`) across 17 dashboard files to fix encoding issues (`???`, encoding bugs).
 
 - Live telemetry widget on the dashboard header now auto-refreshes every 5s with smooth tween animation. The "Total Value Saved" figure and "Tokens Sent / Saved" counters move in real time as new `RequestLog` rows are written.
 
