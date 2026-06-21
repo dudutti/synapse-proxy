@@ -62,10 +62,13 @@ export async function GET(req: Request) {
     take: 5000,
   });
 
-  // Fetch dynamic model pricing for downstream-cost estimation
-  const modelsPricing = await prisma.providerModel.findMany();
+  // Fetch dynamic model pricing from Superadmin configuration
+  const modelsPricing = await prisma.providerModel.findMany({
+    where: { OR: [{ userId: "global" }, { userId: user.id }] }
+  });
   const pricingMap = new Map();
-  modelsPricing.forEach((m) => {
+  // Sort so global is applied first, then user's custom pricing overwrites it
+  modelsPricing.sort((a, b) => a.userId === "global" ? -1 : 1).forEach(m => {
     pricingMap.set(`${m.provider}_${m.modelName}`, m);
   });
 

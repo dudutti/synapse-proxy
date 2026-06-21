@@ -100,7 +100,7 @@ async function fetchDbStats(): Promise<DbStats> {
     prisma.requestLog.count(),
     prisma.requestLog.count({ where: { createdAt: { gte: oneHourAgo } } }),
     prisma.requestLog.count({ where: { createdAt: { gte: oneDayAgo } } }),
-    prisma.providerModel.findMany({ select: { provider: true, modelName: true } }),
+    prisma.providerModel.findMany({ where: { userId: "global" }, select: { provider: true, modelName: true } }),
     // distinct + null filter in where is brittle in Prisma 5 — fetch the
     // raw agentId column and dedupe in JS. Cheap because there are
     // typically < 100 distinct agents per active deployment.

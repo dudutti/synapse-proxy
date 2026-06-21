@@ -53,7 +53,8 @@ func syncPricing() {
 			COALESCE("costCompletionPer1M", 1.0),
 			COALESCE("costCachedInputPer1M", 0),
 			COALESCE("costCacheWritePer1M", 0)
-		FROM "ProviderModel"`)
+		FROM "ProviderModel"
+		WHERE "userId" = 'global'`)
 	if err != nil {
 		log.Printf("PricingSyncer: Error querying ProviderModel: %v", err)
 		return

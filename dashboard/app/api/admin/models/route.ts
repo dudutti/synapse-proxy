@@ -12,6 +12,7 @@ export async function GET() {
   if (!(await isAdmin())) return new NextResponse("Unauthorized", { status: 401 });
   
   const models = await prisma.providerModel.findMany({
+    where: { userId: "global" },
     orderBy: [{ provider: 'asc' }, { modelName: 'asc' }]
   });
   return NextResponse.json(models);
@@ -25,10 +26,10 @@ export async function POST(req: Request) {
     
     const model = await prisma.providerModel.upsert({
       where: {
-        provider_modelName: { provider, modelName }
+        provider_modelName_userId: { provider, modelName, userId: "global" }
       },
       update: { costPromptPer1M, costCompletionPer1M },
-      create: { provider, modelName, costPromptPer1M, costCompletionPer1M }
+      create: { userId: "global", provider, modelName, costPromptPer1M, costCompletionPer1M }
     });
 
     return NextResponse.json(model);
