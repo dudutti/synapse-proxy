@@ -72,7 +72,7 @@ export async function GET(req: Request) {
       COUNT(*) FILTER (WHERE "cacheLevel" IN ('L1','L2','L3','LOOP','L0'))::bigint AS "cacheHits"
     FROM "RequestLog"
     WHERE "sessionId" != ''
-      ${!isSuper ? `AND "apiKeyId" IN (${Prisma.join(userKeyIds)})` : ""}
+      ${!isSuper ? Prisma.sql`AND "apiKeyId" IN (${Prisma.join(userKeyIds)})` : Prisma.empty}
     GROUP BY "sessionId"
     ORDER BY MAX("createdAt") DESC
     LIMIT ${limit}
