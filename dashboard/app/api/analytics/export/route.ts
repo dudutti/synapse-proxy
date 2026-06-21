@@ -18,14 +18,18 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "sessionId is required" }, { status: 400 });
   }
 
+  const isSuper = user.role === "SUPERADMIN";
+
   const apiKeys = await prisma.apiKey.findMany({ where: { userId: user.id } });
   const keyIds = apiKeys.map(k => k.id);
 
+  const where: any = { sessionId: sessionId };
+  if (!isSuper) {
+    where.apiKeyId = { in: keyIds };
+  }
+
   const logs = await prisma.requestLog.findMany({
-    where: {
-      apiKeyId: { in: keyIds },
-      sessionId: sessionId
-    },
+    where,
     orderBy: { createdAt: "asc" },
   });
 

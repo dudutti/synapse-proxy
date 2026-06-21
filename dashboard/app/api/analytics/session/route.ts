@@ -16,16 +16,18 @@ export async function GET(req: Request) {
   const keyIdParam = url.searchParams.get("keyId");
   const sessionIdParam = url.searchParams.get("sessionId"); // optional: filter by sessionId
 
+  const isSuper = user.role === "SUPERADMIN";
+
   let keyIds = apiKeys.map((k) => k.id);
   if (keyIdParam) {
-    if (keyIds.includes(keyIdParam)) {
+    if (isSuper || keyIds.includes(keyIdParam)) {
       keyIds = [keyIdParam];
     } else {
       return NextResponse.json({ error: "Invalid API Key" }, { status: 400 });
     }
   }
 
-  if (keyIds.length === 0) {
+  if (!isSuper && keyIds.length === 0) {
     return NextResponse.json({ error: "No API Keys found" }, { status: 400 });
   }
 
@@ -41,9 +43,13 @@ export async function GET(req: Request) {
 
   // Build Prisma where clause. sessionId filter is optional.
   const where: any = {
-    apiKeyId: { in: keyIds },
     createdAt: { gte: startDate, lte: endDate },
   };
+  if (!isSuper) {
+    where.apiKeyId = { in: keyIds };
+  } else if (keyIdParam) {
+    where.apiKeyId = keyIdParam;
+  }
   if (sessionIdParam) {
     where.sessionId = sessionIdParam;
   }

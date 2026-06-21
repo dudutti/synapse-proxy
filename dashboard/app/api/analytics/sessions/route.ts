@@ -27,8 +27,10 @@ export async function GET(req: Request) {
   const user = await prisma.user.findUnique({ where: { email: session.user.email } });
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const isSuper = user.role === "SUPERADMIN";
+
   const userKeyIds = (await prisma.apiKey.findMany({ where: { userId: user.id } })).map((k) => k.id);
-  if (userKeyIds.length === 0) {
+  if (!isSuper && userKeyIds.length === 0) {
     return NextResponse.json({ sessions: [] });
   }
 
@@ -69,8 +71,8 @@ export async function GET(req: Request) {
       COALESCE(SUM("promptTokensOpt") * 0.30 / 1000000.0 + SUM("completionTokensOpt") * 1.20 / 1000000.0, 0)::float AS "costWith",
       COUNT(*) FILTER (WHERE "cacheLevel" IN ('L1','L2','L3','LOOP','L0'))::bigint AS "cacheHits"
     FROM "RequestLog"
-    WHERE "apiKeyId" IN (${Prisma.join(userKeyIds)})
-      AND "sessionId" != ''
+    WHERE "sessionId" != ''
+      ${!isSuper ? `AND "apiKeyId" IN (${Prisma.join(userKeyIds)})` : ""}
     GROUP BY "sessionId"
     ORDER BY MAX("createdAt") DESC
     LIMIT ${limit}

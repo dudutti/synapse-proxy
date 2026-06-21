@@ -16,16 +16,18 @@ export async function GET(req: Request) {
   const url = new URL(req.url);
   const keyIdParam = url.searchParams.get("keyId");
 
+  const isSuper = user.role === "SUPERADMIN";
+
   let keyIds = apiKeys.map((k) => k.id);
   if (keyIdParam) {
-    if (keyIds.includes(keyIdParam)) {
+    if (isSuper || keyIds.includes(keyIdParam)) {
       keyIds = [keyIdParam];
     } else {
       return NextResponse.json({ error: "Invalid API Key" }, { status: 400 });
     }
   }
 
-  if (keyIds.length === 0) {
+  if (!isSuper && keyIds.length === 0) {
     return NextResponse.json({ logs: [], chartData: [] });
   }
 
@@ -38,10 +40,14 @@ export async function GET(req: Request) {
     gte: new Date(Date.now() - days * 24 * 60 * 60 * 1000)
   } : undefined;
 
-  const whereClause = {
-    apiKeyId: { in: keyIds },
+  const whereClause: any = {
     ...(dateFilter ? { createdAt: dateFilter } : {})
   };
+  if (!isSuper) {
+    whereClause.apiKeyId = { in: keyIds };
+  } else if (keyIdParam) {
+    whereClause.apiKeyId = keyIdParam;
+  }
 
   // Get logs for the table with pagination
   const logs = await prisma.requestLog.findMany({
