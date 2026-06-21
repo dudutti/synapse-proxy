@@ -20,7 +20,7 @@ export default function AlertsPage() {
             href="/"
             className="text-xs text-zinc-500 hover:text-white px-3 py-1.5 rounded-lg border border-white/10 bg-white/5"
           >
-            \u2190 Back to dashboard
+            ← Back to dashboard
           </a>
         </header>
         <AlertRulesPanel />
