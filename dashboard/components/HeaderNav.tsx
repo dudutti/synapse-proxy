@@ -1,12 +1,14 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { createPortal } from "react-dom";
 import Link from "next/link";
 import { ChevronDown, Sparkles, Shield, Database, Cpu, Activity, KeyRound, Layers, Menu, X } from "lucide-react";
 
 export default function HeaderNav() {
   const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [mounted, setMounted] = useState(false);
   const [lang, setLang] = useState<"fr" | "en">(() => {
     if (typeof window !== "undefined") {
       const match = document.cookie.match(/(?:^|; )lang=([^;]*)/);
@@ -14,6 +16,10 @@ export default function HeaderNav() {
     }
     return "fr";
   });
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
 
   const toggleLanguage = (newLang: "fr" | "en") => {
     document.cookie = `lang=${newLang}; path=/; max-age=31536000`;
@@ -132,16 +138,24 @@ export default function HeaderNav() {
 
       {/* Mobile Menu Toggle Button */}
       <button 
-        className="lg:hidden p-2 text-gray-400 hover:text-white focus:outline-none z-50 relative"
+        className="lg:hidden p-2 text-gray-400 hover:text-white focus:outline-none z-[110] relative"
         onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
       >
         {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
       </button>
 
       {/* Mobile Menu Overlay */}
-      {isMobileMenuOpen && (
-        <div className="fixed inset-0 bg-[#050505]/95 backdrop-blur-xl z-40 overflow-y-auto lg:hidden pt-20 pb-10 px-6 border-t border-white/5 mt-16">
-          <div className="flex flex-col gap-8 max-w-sm mx-auto">
+      {mounted && isMobileMenuOpen && createPortal(
+        <div className="fixed inset-0 bg-[#050505]/95 backdrop-blur-xl z-[100] overflow-y-auto lg:hidden pt-24 pb-10 px-6 border-t border-white/5">
+          <div className="absolute top-4 right-8 z-[110]">
+            <button 
+              className="p-2 text-gray-400 hover:text-white focus:outline-none"
+              onClick={() => setIsMobileMenuOpen(false)}
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+          <div className="flex flex-col gap-8 max-w-sm mx-auto mt-4">
             {Object.entries(menu).map(([key, group]) => (
               <div key={key} className="space-y-4">
                 <h3 className="text-sm font-bold text-gray-400 uppercase tracking-wider">{group.label}</h3>
@@ -192,7 +206,8 @@ export default function HeaderNav() {
               </div>
             </div>
           </div>
-        </div>
+        </div>,
+        document.body
       )}
     </>
   );
