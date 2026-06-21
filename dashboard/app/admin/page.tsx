@@ -60,25 +60,25 @@ export default async function AdminOverview() {
 
           <div className="flex items-center gap-3">
             <a
-              href="/admin/explorer"
+              href="/explorer"
               className="px-4 py-2 bg-blue-500/10 text-blue-400 border border-blue-500/20 rounded-xl font-bold hover:bg-blue-500/20 transition-colors text-sm"
             >
               Request Explorer {"\u2192"}
             </a>
             <a
-              href="/admin/pricing"
+              href="/pricing"
               className="px-4 py-2 bg-amber-500/10 text-amber-400 border border-amber-500/20 rounded-xl font-bold hover:bg-amber-500/20 transition-colors text-sm"
             >
               Pricing Coverage {"\u2192"}
             </a>
             <a
-              href="/admin/expensive"
+              href="/expensive"
               className="px-4 py-2 bg-orange-500/10 text-orange-400 border border-orange-500/20 rounded-xl font-bold hover:bg-orange-500/20 transition-colors text-sm"
             >
               Expensive Prompts {"\u2192"}
             </a>
             <a
-              href="/admin/sessions"
+              href="/sessions"
               className="px-4 py-2 bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 rounded-xl font-bold hover:bg-emerald-500/20 transition-colors text-sm"
             >
               Session History {"\u2192"}
