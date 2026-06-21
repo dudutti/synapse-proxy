@@ -98,6 +98,9 @@ export async function GET(req: Request) {
   const savingsByClassByProvider: Record<string, { inputFresh: number; cacheRead: number; cacheCreation: number; output: number }> = {};
   let totalSavingsByClass = { inputFresh: 0, cacheRead: 0, cacheCreation: 0, output: 0 };
 
+  // Intent distribution
+  const intentDistribution: Record<string, number> = {};
+
   for (const log of allLogs) {
     const origTokens = log.promptTokensOrig + log.completionTokensOrig;
     const optTokens = log.promptTokensOpt + log.completionTokensOpt;
@@ -193,6 +196,10 @@ export async function GET(req: Request) {
     existing.cacheReadTokens += cRead;
     existing.cacheCreationTokens += cCreation;
     chartMap.set(day, existing);
+
+    // Intent tracking
+    const intent = log.intentTag || "unknown";
+    intentDistribution[intent] = (intentDistribution[intent] || 0) + 1;
   }
 
   const chartData = Array.from(chartMap.values()).map(d => ({
@@ -306,6 +313,7 @@ export async function GET(req: Request) {
     totalCacheMiss,
     measuredSavings,
     opportunitySavings,
+    intentDistribution,
     // Per-class savings (the full breakdown)
     totalSavingsByClass,
     savingsByClassByProvider,

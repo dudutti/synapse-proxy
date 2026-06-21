@@ -6,6 +6,9 @@ const nextConfig = {
   typescript: {
     ignoreBuildErrors: true,
   },
+  experimental: {
+    serverComponentsExternalPackages: ['@xenova/transformers', 'onnxruntime-node'],
+  },
 };
 
 export default nextConfig;

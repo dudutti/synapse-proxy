@@ -3,19 +3,26 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Status-Active-success.svg" alt="Status">
-  <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="License">
-  <img src="https://img.shields.io/badge/Go-1.21+-00ADD8.svg" alt="Go Version">
-  <img src="https://img.shields.io/badge/OpenAI%20API-Compatible-orange.svg" alt="OpenAI Compatible">
+  <a href="https://synapse-proxy.com"><img src="https://img.shields.io/badge/Website-synapse--proxy.com-indigo.svg?style=flat-square" alt="Website"></a>
+  <img src="https://img.shields.io/badge/Status-Active-success.svg?style=flat-square" alt="Status">
+  <img src="https://img.shields.io/badge/License-MIT-blue.svg?style=flat-square" alt="License">
+  <img src="https://img.shields.io/badge/Rust-1.75+-orange.svg?style=flat-square" alt="Rust Version">
+  <img src="https://img.shields.io/badge/Go-1.21+-00ADD8.svg?style=flat-square" alt="Go Version">
+  <img src="https://img.shields.io/badge/Next.js-14+-black.svg?style=flat-square&logo=next.js" alt="Next.js">
+  <img src="https://img.shields.io/badge/OpenAI_API-Compatible-green.svg?style=flat-square&logo=openai" alt="OpenAI Compatible">
 </p>
 
-<h1 align="center">Synapse Proxy: The Ultimate Agentic Firewall & Observability Gateway</h1>
+<h1 align="center">Synapse Proxy: The Ultimate Agentic Firewall & Deep Telemetry Gateway</h1>
 
-> **A drop-in, open-source proxy that brings observability, security, and smart caching to your autonomous AI agents.**
+> **A drop-in, open-source proxy that brings military-grade observability, security, and smart caching to your autonomous AI agents.**
 
-Synapse Proxy sits gracefully between your application and any OpenAI-compatible LLM provider. Its primary mission is to empower developers with **Agentic Observability** and a **Smart Firewall**, keeping rogue agent loops in check, protecting sensitive PII data, and making multi-turn LLM interactions entirely visible and measurable.
+Synapse Proxy sits gracefully between your application and any OpenAI-compatible LLM provider. Its primary mission is to empower developers with **Deep Agentic Observability** and a **Smart Firewall**, keeping rogue agent loops in check, protecting sensitive data, and making multi-turn LLM interactions entirely visible and measurable.
 
-While it actively protects your infrastructure, Synapse Proxy quietly optimizes token usage in the background with a four-tier cache pipeline (L0 to L3), ensuring you never pay twice for the same agentic thought process.
+<p align="center">
+  <img src="docs/assets/dashboard_demo.webp" alt="Dashboard Animated Demo" width="800" />
+</p>
+
+While it actively protects your infrastructure and monitors your agents' intents, Synapse Proxy quietly optimizes token usage in the background with a four-tier cache pipeline (L0 to L3), ensuring you never pay twice for the same agentic thought process.
 
 **Version française** : [README_FR.md](README_FR.md)
 
@@ -23,27 +30,25 @@ While it actively protects your infrastructure, Synapse Proxy quietly optimizes 
 
 ## 🛡️ Agentic Firewall & Security
 
-When building autonomous agents, the biggest risk is infinite loops and runaway costs. Synapse Proxy introduces a robust Firewall specifically designed for AI agents:
+When building autonomous agents (AutoGPT, LangChain, custom loops), the biggest risk is infinite loops, runaway costs, and prompt injections. Synapse Proxy introduces a robust Firewall specifically designed for AI agents:
 
-- **Loop Kill Switch & Self-Correction:** Detects when an agent is drifting into an infinite loop (repeating identical request payloads). It intercepts the execution and returns a mock OpenAI-compatible chat completion response (`HTTP 200`) containing a descriptive self-correction warning to guide the agent to change strategy.
-- **Granular Tool Cache TTLs:** Configure custom cache durations per tool name (including setting TTL to 0s to disable caching for specific stateful tools) via the Firewall Dashboard.
-- **PII Redaction:** Native regex-based masking of sensitive data (Emails, API Keys) before the prompt ever reaches the upstream provider.
-- **Tool Allowlisting:** Lock down your agent's capabilities. If an agent hallucinates a tool or tries to invoke an unauthorized function, the Proxy actively blocks the request.
+- **Loop Kill Switch & Self-Correction:** Detects when an agent is drifting into an infinite loop (repeating identical tool payloads). It intercepts the execution and returns a mock OpenAI-compatible chat completion response (`HTTP 200`) containing a descriptive self-correction warning to guide the agent to change strategy without crashing the process.
+- **Tool Allowlisting & Fingerprinting:** Lock down your agent's capabilities. If an agent hallucinates a tool or tries to invoke an unauthorized function, the Proxy actively blocks the request.
+- **Granular Tool Cache TTLs:** Configure custom cache durations per tool name (including setting TTL to 0s to disable caching for specific stateful tools).
+- **PII Redaction:** Native regex-based masking of sensitive data (Emails, API Keys, Phone Numbers) before the prompt ever reaches the upstream provider.
 - **Session Circuit Breaker:** Define strict prompt-token limits per session to cap expenditures on a per-task basis.
 
 ---
 
-## 📊 Advanced Observability & Session Replay
+## 📊 Deep Telemetry & Intent Observability
 
-Every request is persisted to a PostgreSQL database, turning black-box agent behavior into a transparent, analyzable flow.
+Every request is persisted to a PostgreSQL database, turning black-box agent behavior into a transparent, analyzable flow via our stunning Next.js Control Plane.
 
-- **Session Replay Timeline:** Inspect agent interactions step-by-step. Reconstruct the agent's flow, tool calls, and payload latency across a unified timeline.
-- **Context Window Tracker:** A visual graph comparing the *Original Prompt Tokens* against the *L3 Compressed Tokens* over time, demonstrating exactly how context grows and how Synapse Proxy mitigates it.
-- **System Prompt Diffing:** Agents sometimes rewrite their own instructions mid-session. The proxy extracts and diffs the system prompt, highlighting exactly what changed.
-- **Dataset Export (JSONL):** One-click export of a session's trajectory into a Fine-Tuning ready JSONL dataset.
+- **Local AI Intent Classification:** We use `@xenova/transformers` (running locally, 100% offline) to asynchronously classify every prompt intent (`coding`, `rag`, `chat`, `extraction`) without adding a single millisecond of latency to the critical proxy path.
+- **Session Replay Timeline:** Inspect agent interactions step-by-step. Reconstruct the agent's flow, tool calls, and payload latency across a unified visual timeline.
+- **System Prompt Diffing:** Agents sometimes rewrite their own instructions mid-session. The proxy extracts and diffs the system prompt, highlighting exactly what changed in the dashboard.
+- **Context Window Tracker:** A dynamic graph comparing the *Original Prompt Tokens* against the *L3 Compressed Tokens* over time, demonstrating exactly how context grows and how Synapse Proxy mitigates it.
 - **A/B Benchmark:** Toggle benchmark mode to fire control and optimized requests in parallel, using an LLM judge to score response similarity.
-
-> 📖 **Deep Dive:** Want to know exactly what is logged? Read the [Telemetry & Database Schema](docs/telemetry_schema.md) documentation.
 
 <p align="center">
   <img src="docs/assets/flow.png" alt="Synapse Proxy Flow" width="650" />
@@ -51,9 +56,9 @@ Every request is persisted to a PostgreSQL database, turning black-box agent beh
 
 ---
 
-## ⚡ Smart Caching & Optimization
+## ⚡ Cost Optimization as a Bonus
 
-Though security and observability take center stage, Synapse Proxy features a state-of-art caching engine designed to minimize latency and token waste. 
+Though security and observability take center stage, Synapse Proxy features a state-of-the-art caching engine designed to minimize latency and token waste. 
 
 - **Drop-in OpenAI replacement:** No SDK changes required. Just point your client at `http://<host>:8080/v1` with an `Authorization: Bearer sk-opti-...` virtual key.
 - **Four caches in one binary:**
@@ -61,9 +66,7 @@ Though security and observability take center stage, Synapse Proxy features a st
   - **L1 Exact Match:** Ultra-fast SHA-256 match for scripts retrying the exact same query.
   - **L2 Semantic Match:** ONNX-based vector search (MiniLM) for conceptually identical queries. Auto-disabled on multi-turn conversations to prevent state corruption.
   - **L3 Prefix-Preserving Compression:** Intelligently prunes stale `<thought>` blocks, truncates oversized tool outputs, and condenses older history. It maintains a byte-exact prefix so the upstream provider's native prompt cache remains 99% effective.
-  - **Semantic Tool Deduplication:** Intercepts LLM tool calls and retrieves cached outputs from similar prior invocations (exact matching + ONNX embeddings with cosine similarity >90% on VSS), recursively calling the LLM upstream to bypass client-side tool execution.
-
-> 📖 **Deep Dive:** Learn the magic behind our Cache-Preserving L3 and ONNX L2 search in the [Caching Architecture](docs/caching_architecture.md) documentation.
+  - **Semantic Tool Deduplication:** Intercepts LLM tool calls and retrieves cached outputs from similar prior invocations, bypassing client-side execution loops.
 
 <p align="center">
   <img src="docs/assets/diag_en.png" alt="Synapse Proxy Diagram" width="650" />
@@ -77,8 +80,6 @@ Synapse Proxy doubles as a robust MCP server, exposing **14 specialized tools** 
 
 Since Synapse Proxy is fully open source, **all 14 tools are completely free to use** locally or on your self-hosted stack.
 
-To expose all 14 tools, run the server with `--mcp-tier=full` (pointing it to your self-hosted dashboard):
-
 ```bash
 # Stdio mode (recommended for local Cursor/IDE integrations)
 ./synapse-proxy --mcp --mcp-tier=full
@@ -91,64 +92,70 @@ To expose all 14 tools, run the server with `--mcp-tier=full` (pointing it to yo
 
 ---
 
-## 📊 Dashboard (Next.js) — Fully Open Source
+## 💻 The Dashboard (Next.js) — 100% Open Source
 
-The repo ships with a complete Next.js dashboard under `./dashboard` that turns the proxy's raw telemetry into an actionable control plane. It is **fully open source under the same MIT license** as the proxy: audit it, fork it, self-host it, theme it — there is no closed-source SaaS-only path.
+The repo ships with a complete Next.js dashboard under `./dashboard` that turns the proxy's raw telemetry into an actionable control plane. **It is fully open source under the same MIT license as the proxy**: audit it, fork it, self-host it, theme it — there is no closed-source SaaS-only path.
 
-| Capability | Where it lives | Why it matters |
-|---|---|---|
-| **Live Telemetry** (group by Agent / Session / Model) | `app/page.tsx`, `components/LiveTelemetryGrouped.tsx` | See every request arrive via SSE. Rows that share a conversation (same system prompt + tool set) auto-group using `convSignature` (see "Multiturn tracking" below). |
-| **Agent Firewall Modal** (per-key) | `components/FirewallModal.tsx` | The headline feature. Toggle, per virtual key: L1 / L2 / L3 cache stages, the kill switch, PII redaction, the session token cap, and the tool allow-list. Changes propagate to Redis in real time so the proxy picks them up on the next request. |
-| **Tool-call fingerprinting** (`optiagent/tool_fingerprint.go` + `transport_http.go`) | Proxy-side | Detects an agent calling the same tool with the same arguments 4× within 30 seconds. Returns **HTTP 429 + Retry-After: 60** ("Recursive Loop Detected") when cache check misses, so the agent backs off without dying. |
-| **Multiturn session tracking** (`utils/multiturn.go` + `RequestLog.turnCount`/`convSignature`) | Proxy-side + DB | Every row records `(turnCount, convSignature)` so the dashboard can group rows by natural conversation even when the agent never sent an explicit `X-Session-Id`. The conversation signature is `sha1(system_prompt || tool_names)[:8]`. |
-| **Session Summary** (3 observability graphs) | `app/page.tsx`, `app/admin/sessions/page.tsx` | Context Window (Original vs L3 Compressed), System Prompt Diff (with `react-diff-viewer-continued`), Agent Flow Timeline (step-by-step with tool calls). Available for every group with 2+ rows. |
-| **Playground v3** (`/playground`) | `app/playground/` | Side-by-side A/B chat: same prompt twice in parallel, once through the proxy, once directly upstream (forced `X-Bypass-Cache: true`). Per-bubble cache badges, sparklines, artifact renderer (`<iframe sandbox>` for HTML, code download for python/js/etc.). |
-| **Request Explorer** (`/admin/explorer`) | `app/admin/explorer/page.tsx` | Sortable, filterable table over `RequestLog` with per-row drill-down to full payload + optimized payload + system prompt. |
-| **Admin / Sessions / Pricing / Users** | `app/admin/*` | Self-host the whole product: virtual keys, model pricing, alert rules, email campaigns, Stripe billing (set `STRIPE_*` env to enable). |
+| Feature | Description |
+|---------|-------------|
+| **Live Telemetry** | See every request arrive via SSE. Rows that share a conversation automatically group together using a conversation signature. |
+| **Global Command Center** | A stunning 3D/HUD interface showing real-time token flows, cache hit rates, and live server health. |
+| **Agent Firewall Modal** | Toggle L1/L2/L3 caches, kill switch, PII redaction, session token limits, and tool allow-lists per virtual key. Changes sync to Redis instantly. |
+| **Playground v3** | Side-by-side A/B chat: same prompt twice in parallel, once through the proxy, once directly upstream. Includes an artifact renderer. |
+| **Admin Panel** | Self-host the whole product: manage virtual keys, dynamic model pricing, user management, alert rules, and Stripe billing. |
 
-### What's new (post-launch)
-
-- **Agent Firewall as a first-class concept** — every virtual key has firewall configurations (L1/L2/L3 cache toggles, kill switch, session token limit, tool whitelist, PII redaction, fingerprint loop detection, custom tool TTLs). Configured in the dashboard and synced to Redis.
-- **Self-Correction loop warnings** — replaces traditional hard loops (HTTP 400/429 blocks) with mock HTTP 200 completion messages warning the agent about the repeated action, allowing the agent to self-correct within the prompt history.
-- **Semantic Tool Deduplication** — intercepting tool calls in LLM responses and resolving them against cached tool executions using ONNX embeddings and Redis VSS, triggering recursive upstream calls to bypass client-side execution loops.
-- **Multiturn session detection** — the dashboard groups requests by conversation fingerprint instead of per-request buckets, so a 4-turn debugging session shows up as one row with `Tour 1/2/3/4` badges, not 4 separate rows.
-- **MCP server in HTTP mode** — runs as a long-lived process behind the same Caddy reverse proxy, exposing 14 tools (4 free + 10 paid) to any MCP-compatible IDE.
-
-### Dashboard architecture
+### Architecture
 
 ```
 dashboard/
-├── app/                        # Next.js App Router
-│   ├── (auth)/                 # login / signup / forgot-password / reset-password
-│   ├── admin/                  # admin pages (sessions / explorer / pricing / users / alerts)
-│   ├── api/                    # REST + SSE endpoints (analytics, keys, sessions, telemetry)
-│   ├── playground/             # A/B Playground v3
-│   └── settings/               # per-key Firewall + Zero-Log + benchmark toggles
-├── components/                 # LiveTelemetryGrouped, FirewallModal, RequestExplorer, etc.
+├── app/                        # Next.js App Router (React Server Components)
+├── components/                 # LiveTelemetryGrouped, FirewallModal, TokenFlowAnimation, etc.
 ├── lib/                        # authOptions, prisma, stripe, email
-├── prisma/
-│   ├── schema.prisma           # ApiKey firewall fields, RequestLog turnCount / convSignature
-│   └── migrations/             # 2026_06_*: agent_detector, pricing, zero_log, alert_rules, payload_hash, response_payload, multiturn
-├── public/                     # logo, diag_en, diag_fr, flow, mega_flow
-└── .env.example                # template; .env is git-ignored
+├── prisma/                     # PostgreSQL schema & migrations
+└── .env.example                # Configuration template
 ```
 
 The dashboard reads from the same Postgres + Redis instances as the proxy, so a self-hosted deployment has **one database to back up**.
 
 ---
 
-## 🛠️ API Endpoints
+## 🚀 Getting Started
 
-| Method | Path | Purpose |
-|--------|------|---------|
-| `POST` | `/v1/chat/completions` | The core OpenAI-compatible proxy endpoint. |
-| `GET`  | `/healthz` | Liveness probe. |
-| `GET`  | `/readyz`  | Readiness probe (verifies Postgres & Redis connections). |
-| `GET`  | `/metrics` | Prometheus metrics (cache hits, panics, loop blocks). |
-| `GET`  | `/v1/models` | List of supported models. |
+### 1. Self-Host via Docker Compose
+Clone the repository and spin up the entire stack (Proxy, Postgres, Redis, Next.js Dashboard, Caddy) in one command:
+
+```bash
+git clone https://github.com/yourusername/synapse-proxy.git
+cd synapse-proxy
+
+# Copy the example environment variables
+cp .env.example .env
+
+# Build and start the stack
+docker compose -f docker-compose.prod.yml up -d --build
+```
+
+### 2. Quickstart (Client Code)
+Once your proxy is running, changing your code is as simple as updating the `baseURL` and `apiKey`:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://localhost:8080/v1", # Point to Synapse Proxy
+    api_key="sk-opti-..."                # Use your Synapse Virtual Key
+)
+
+response = client.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Hello!"}]
+)
+```
 
 ---
 
 ## 📄 License
 
-Synapse Proxy is **fully open source under the MIT License** — proxy, dashboard, and SDKs alike. Self-host the whole stack, audit every line, fork whatever you need. We offer a managed SaaS at [synapse-proxy.com](https://synapse-proxy.com) for teams that prefer not to operate Postgres + Redis themselves; the hosted version is the exact same code as this repo, just pre-configured. The SaaS is a **convenience**, not a gatekeeper.
+Synapse Proxy is **fully open source under the MIT License** — proxy, dashboard, and SDKs alike. Self-host the whole stack, audit every line, fork whatever you need. 
+
+We offer a managed SaaS at [synapse-proxy.com](https://synapse-proxy.com) for teams that prefer not to operate Postgres + Redis themselves; the hosted version runs the exact same code as this repo. The SaaS is a **convenience**, not a gatekeeper.

@@ -4,6 +4,7 @@ import { Coins, Play, Check, TrendingDown } from "lucide-react";
 import DemoVideo from "@/components/DemoVideo";
 import HeaderNav from "@/components/HeaderNav";
 import Footer from "@/components/Footer";
+import RoiSimulator from "@/components/RoiSimulator";
 import { cookies } from "next/headers";
 import ParticleBackground from "@/components/ParticleBackground";
 import StructuredData from "@/components/StructuredData";
@@ -88,6 +89,11 @@ export default async function CostReductionPage() {
               </ul>
             </div>
           ))}
+        </div>
+
+        {/* ROI Simulator */}
+        <div className="mb-24">
+          <RoiSimulator />
         </div>
 
         {/* Video Demo */}

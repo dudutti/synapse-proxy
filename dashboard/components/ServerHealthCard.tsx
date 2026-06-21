@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
+import GlowingCard from "@/components/GlowingCard";
 
 // Animated gauge ”” counter smoothly tweens to its target value with a
 // glow that intensifies as the value rises. Designed for HUD-style
@@ -63,7 +64,7 @@ export function Gauge({
   }, [value]);
 
   return (
-    <div className="relative p-5 rounded-2xl bg-black/40 border border-white/10 overflow-hidden group hover:border-white/20 transition-colors">
+    <GlowingCard className="relative p-5 rounded-2xl bg-black/40 border border-white/10 overflow-hidden group hover:border-white/20 transition-colors">
       {/* Glow background that intensifies with value */}
       <div
         className="absolute inset-0 opacity-20 pointer-events-none transition-opacity duration-500"
@@ -120,7 +121,7 @@ export function Gauge({
           />
         </div>
       </div>
-    </div>
+    </GlowingCard>
   );
 }
 

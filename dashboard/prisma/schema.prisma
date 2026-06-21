@@ -130,6 +130,7 @@ model RequestLog {
   toolCalls       String?  @db.Text // Store JSON of detected tool calls
   isSimulated     Boolean  @default(false) // True if the cache/compression was bypassed but savings were simulated
   killSwitchFired Boolean  @default(false) // True if this request triggered the loop kill switch
+  intentTag       String?  // e.g., "code", "rag", "chat", "extraction" (added by intent-tagger cron)
 
   createdAt       DateTime @default(now())
 

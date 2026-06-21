@@ -8,6 +8,8 @@ import Link from "next/link";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell, ComposedChart, Area } from "recharts";
 import { motion, useMotionValue, useTransform, animate, AnimatePresence } from "framer-motion";
 import { PlayCircle, Square, LogOut, Settings, Database, Activity, Info, ChevronDown, Menu, X, Terminal, Search, ShieldAlert, History, DollarSign, BellRing } from "lucide-react";
+import GlowingCard from "@/components/GlowingCard";
+import TokenFlowAnimation from "@/components/TokenFlowAnimation";
 import ParticleBackground from "@/components/ParticleBackground";
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
 import { LiveTelemetryGrouped, LiveRequest } from "@/components/LiveTelemetryGrouped";
@@ -101,6 +103,7 @@ export default function Dashboard() {
   const [totalSavingsByClass, setTotalSavingsByClass] = useState<SavingsByClass>({ inputFresh: 0, cacheRead: 0, cacheCreation: 0, output: 0 });
   const [savingsByClassByProvider, setSavingsByClassByProvider] = useState<Record<string, SavingsByClass>>({});
   const [totalSavingsReal, setTotalSavingsReal] = useState(0);
+  const [intentDistribution, setIntentDistribution] = useState<Record<string, number>>({});
 
   const [isRecording, setIsRecording] = useState(false);
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
@@ -283,6 +286,7 @@ export default function Dashboard() {
     if (d.totalSavingsByClass) setTotalSavingsByClass(d.totalSavingsByClass);
     if (d.savingsByClassByProvider) setSavingsByClassByProvider(d.savingsByClassByProvider);
     if (typeof d.totalSavingsReal === 'number') setTotalSavingsReal(d.totalSavingsReal);
+    if (d.intentDistribution) setIntentDistribution(d.intentDistribution);
   }, [swrAnalytics]);
 
   useEffect(() => {
@@ -383,6 +387,7 @@ export default function Dashboard() {
   ].filter(d => d.value > 0);
 
   const totalReqs = cacheDist.MISS + cacheDist.L1 + cacheDist.L2 + cacheDist.L3;
+  const hitRate = totalReqs > 0 ? ((cacheDist.L1 + cacheDist.L2 + cacheDist.L3) / totalReqs) * 100 : 0;
 
   const containerVars = {
     hidden: { opacity: 0 },
@@ -606,7 +611,7 @@ export default function Dashboard() {
 
         <motion.div variants={itemVars} className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
           {/* Value Saved Card */}
-          <div className="lg:col-span-2 relative overflow-hidden bg-black/40 border border-white/10 rounded-3xl p-10 backdrop-blur-xl shadow-2xl flex flex-col justify-center">
+          <GlowingCard className="lg:col-span-2 relative overflow-hidden bg-black/40 border border-white/10 rounded-3xl p-10 backdrop-blur-xl shadow-2xl flex flex-col justify-center">
             <div className="flex justify-between items-start mb-2 relative z-10">
               <h2 className="text-lg text-gray-400 uppercase tracking-widest font-bold">Total Value Saved</h2>
               <div className="flex gap-4">
@@ -682,10 +687,10 @@ export default function Dashboard() {
                 </div>
               </div>
             </div>
-          </div>
+          </GlowingCard>
 
           {/* Cache Hit Ratio Card */}
-          <div className="bg-black/40 border border-white/10 rounded-3xl p-8 backdrop-blur-xl shadow-2xl flex flex-col items-center justify-center relative">
+          <GlowingCard className="bg-black/40 border border-white/10 rounded-3xl p-8 backdrop-blur-xl shadow-2xl flex flex-col items-center justify-center relative">
             <div className="absolute top-4 right-4 group cursor-help">
               <Info className="w-5 h-5 text-gray-500 hover:text-emerald-400 transition" />
               <div className="absolute right-0 top-6 w-64 p-4 bg-black/90 border border-white/10 rounded-xl shadow-2xl text-xs text-gray-300 opacity-0 group-hover:opacity-100 transition pointer-events-none z-50">
@@ -743,12 +748,21 @@ export default function Dashboard() {
                 </div>
               ))}
             </div>
-          </div>
+          </GlowingCard>
         </motion.div>
 
-        <motion.div variants={itemVars} className="grid grid-cols-1 lg:grid-cols-2 gap-8">
+        {/* Token Flow Animation HUD */}
+        <motion.div variants={itemVars} className="mb-8">
+          <TokenFlowAnimation 
+            tokensIn={totals.sent.input} 
+            tokensOut={totals.optimized.input || totals.sent.input} 
+            active={hitRate > 0 || totals.optimized.input > 0} 
+          />
+        </motion.div>
+
+        <motion.div variants={itemVars} className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
           {/* Line Chart */}
-          <section className="bg-black/40 p-6 rounded-3xl border border-white/10 backdrop-blur-xl shadow-2xl">
+          <section className="lg:col-span-2 bg-black/40 p-6 rounded-3xl border border-white/10 backdrop-blur-xl shadow-2xl">
             <h3 className="text-sm text-gray-400 uppercase tracking-widest font-bold mb-2">Coût cumulé & économies par classe</h3>
             <p className="text-[10px] text-gray-500 mb-4">
               Lignes du haut : coût original vs coût payé. Aires empilées en bas : économies fragmentées par classe de token.
@@ -782,6 +796,56 @@ export default function Dashboard() {
             </div>
           </section>
 
+          {/* Intent Pie Chart */}
+          <section className="bg-black/40 p-6 rounded-3xl border border-white/10 backdrop-blur-xl shadow-2xl flex flex-col">
+            <h3 className="text-sm text-gray-400 uppercase tracking-widest font-bold mb-2">Répartition des Intents</h3>
+            <p className="text-[10px] text-gray-500 mb-4">
+              Classification IA (via Transformers.js)
+            </p>
+            <div className="flex-1 min-h-[250px]">
+              {Object.keys(intentDistribution).length > 0 ? (
+                <ResponsiveContainer width="100%" height="100%">
+                  <PieChart>
+                    <Pie
+                      data={Object.entries(intentDistribution).map(([name, value], i) => ({
+                        name: name.charAt(0).toUpperCase() + name.slice(1),
+                        value,
+                        fill: ["#34d399", "#60a5fa", "#a78bfa", "#fbbf24", "#22d3ee", "#fb7185"][i % 6]
+                      }))}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={60}
+                      outerRadius={80}
+                      paddingAngle={5}
+                      dataKey="value"
+                    />
+                    <Tooltip
+                      contentStyle={{ backgroundColor: '#000', borderColor: '#333', borderRadius: '8px' }}
+                      itemStyle={{ color: '#fff' }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="flex items-center justify-center h-full text-zinc-600 text-sm font-mono tracking-widest uppercase">Analyse en cours...</div>
+              )}
+            </div>
+            {Object.keys(intentDistribution).length > 0 && (
+              <div className="mt-4 flex flex-wrap justify-center gap-3 text-xs">
+                {Object.entries(intentDistribution).map(([name, _], i) => {
+                  const fill = ["#34d399", "#60a5fa", "#a78bfa", "#fbbf24", "#22d3ee", "#fb7185"][i % 6];
+                  return (
+                    <div key={name} className="flex items-center gap-1.5 text-gray-400">
+                      <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: fill }} />
+                      {name.charAt(0).toUpperCase() + name.slice(1)}
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </section>
+        </motion.div>
+
+        <motion.div variants={itemVars} className="mb-8">
           <section className="bg-black/40 p-6 rounded-3xl border border-white/10 backdrop-blur-xl shadow-2xl flex flex-col min-h-[420px] max-h-[80vh]">
             <div className="flex justify-between items-center mb-6">
               <h3 className="text-sm text-gray-400 uppercase tracking-widest font-bold">Live Telemetry</h3>
