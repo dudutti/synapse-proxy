@@ -10,19 +10,27 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session?.user) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
 
+  const user = session.user as any;
+  const isSuper = user.role === "SUPERADMIN";
+  const targetUserId = isSuper ? "global" : user.id;
+
   const [rules, recentEvents, unackedCount] = await Promise.all([
     prisma.alertRule.findMany({
+      where: isSuper ? {} : { userId: targetUserId },
       orderBy: { createdAt: "desc" },
     }),
     prisma.alertEvent.findMany({
+      where: isSuper ? {} : { rule: { userId: targetUserId } },
       orderBy: { firedAt: "desc" },
       take: 50,
     }),
-    prisma.alertEvent.count({ where: { acknowledged: false } }),
+    prisma.alertEvent.count({ 
+      where: isSuper ? { acknowledged: false } : { acknowledged: false, rule: { userId: targetUserId } }
+    }),
   ]);
 
   return NextResponse.json({ rules, recentEvents, unackedCount });
@@ -30,9 +38,13 @@ export async function GET() {
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session?.user) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
+
+  const user = session.user as any;
+  const isSuper = user.role === "SUPERADMIN";
+  const targetUserId = isSuper ? "global" : user.id;
 
   const body = await req.json();
   const { name, metric, operator, threshold, windowSec, enabled, severity, notifyEmail, notifySlack } = body;
@@ -49,6 +61,7 @@ export async function POST(req: Request) {
 
   const rule = await prisma.alertRule.create({
     data: {
+      userId: targetUserId,
       name,
       metric,
       operator,

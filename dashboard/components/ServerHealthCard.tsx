@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "framer-motion";
 // Animated gauge ”” counter smoothly tweens to its target value with a
 // glow that intensifies as the value rises. Designed for HUD-style
 // dashboards where instant eye-tracking matters more than precision.
-function Gauge({
+export function Gauge({
   label,
   value,
   max = 100,
@@ -125,7 +125,7 @@ function Gauge({
 }
 
 // Compact bar gauge ”” like Gauge but inline, for dense lists.
-function BarGauge({
+export function BarGauge({
   label,
   value,
   max = 100,
@@ -165,7 +165,7 @@ function BarGauge({
 
 // Sparkline ”” same shape as the Playground sparkline but designed for
 // 30 datapoints of system history.
-function Sparkline({
+export function Sparkline({
   values,
   color = "#34d399",
   height = 32,

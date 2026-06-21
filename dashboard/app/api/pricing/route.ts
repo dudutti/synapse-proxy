@@ -13,13 +13,26 @@ export const dynamic = "force-dynamic";
 
 export async function GET() {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session?.user) {
     return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  const user = session.user as any;
+  const isSuper = user.role === "SUPERADMIN";
+
+  let userKeyIds: string[] = [];
+  if (!isSuper) {
+    const keys = await prisma.apiKey.findMany({
+      where: { userId: user.id },
+      select: { id: true }
+    });
+    userKeyIds = keys.map(k => k.id);
   }
 
   // Distinct (provider, model) in RequestLog. Filter out null model
   // rows in JS because Prisma 5 chokes on `distinct` + `where: { NOT: null }`.
   const usedRaw = await prisma.requestLog.findMany({
+    where: isSuper ? {} : { apiKeyId: { in: userKeyIds } },
     distinct: ["provider", "model"],
     select: { provider: true, model: true },
   });
@@ -27,6 +40,7 @@ export async function GET() {
 
   // Distinct entries in ProviderModel
   const known = await prisma.providerModel.findMany({
+    where: { OR: [{ userId: "global" }, { userId: user.id }] },
     select: { provider: true, modelName: true },
   });
   const knownKeys = new Set(known.map((k) => `${k.provider}:${k.modelName}`));
@@ -38,7 +52,11 @@ export async function GET() {
     if (knownKeys.has(key)) continue;
 
     const stats = await prisma.requestLog.aggregate({
-      where: { provider: u.provider, model: u.model },
+      where: { 
+        provider: u.provider, 
+        model: u.model,
+        ...(isSuper ? {} : { apiKeyId: { in: userKeyIds } })
+      },
       _count: { _all: true },
       _sum: {
         promptTokensOrig: true,
@@ -74,9 +92,13 @@ export async function GET() {
 // POST: add a new ProviderModel entry. Body: { provider, modelName, costPromptPer1M, costCompletionPer1M, costCachedInputPer1M?, costCacheWritePer1M? }
 export async function POST(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session?.user) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
+
+  const user = session.user as any;
+  const isSuper = user.role === "SUPERADMIN";
+  const targetUserId = isSuper ? "global" : user.id;
 
   const body = await req.json();
   const { provider, modelName, costPromptPer1M, costCompletionPer1M, costCachedInputPer1M, costCacheWritePer1M } = body;
@@ -90,7 +112,7 @@ export async function POST(req: NextRequest) {
 
   // Upsert by (provider, modelName) unique constraint
   const row = await prisma.providerModel.upsert({
-    where: { provider_modelName: { provider, modelName } },
+    where: { provider_modelName_userId: { provider, modelName, userId: targetUserId } },
     update: {
       costPromptPer1M,
       costCompletionPer1M,
@@ -98,6 +120,7 @@ export async function POST(req: NextRequest) {
       costCacheWritePer1M: costCacheWritePer1M ?? null,
     },
     create: {
+      userId: targetUserId,
       provider,
       modelName,
       costPromptPer1M,

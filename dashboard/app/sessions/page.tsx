@@ -116,10 +116,10 @@ export default function SessionsHistoryPage() {
             <h1 className="text-3xl font-bold">Session History</h1>
           </div>
           <button
-            onClick={() => router.push("/admin")}
+            onClick={() => router.push("/")}
             className="px-4 py-2 rounded-lg bg-white/5 hover:bg-white/10 border border-white/10 text-sm transition"
           >
-            Back to Admin
+            Back to Dashboard
           </button>
         </div>
 
@@ -208,7 +208,7 @@ export default function SessionsHistoryPage() {
                   <p className="text-xs font-mono text-zinc-500">{openSessionSummary.sessionId}</p>
                 </div>
                 <button
-                  onClick={() => router.push(`/admin/explorer?sessionId=${encodeURIComponent(openSessionSummary.sessionId)}`)}
+                  onClick={() => router.push(`/explorer?sessionId=${encodeURIComponent(openSessionSummary.sessionId)}`)}
                   className="px-4 py-2 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-bold text-xs transition shadow-lg shadow-blue-600/10"
                 >
                   Explore Session Logs {"\u2192"}

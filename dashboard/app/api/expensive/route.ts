@@ -20,8 +20,30 @@ const DEFAULT_LIMIT = 20;
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session?.user) {
     return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  const user = session.user as any;
+  const isSuper = user.role === "SUPERADMIN";
+
+  let userKeyIds: string[] = [];
+  if (!isSuper) {
+    const keys = await prisma.apiKey.findMany({
+      where: { userId: user.id },
+      select: { id: true }
+    });
+    userKeyIds = keys.map(k => k.id);
+    if (userKeyIds.length === 0) {
+      return NextResponse.json({
+        rows: [],
+        windowHours: 0,
+        totalHits: 0,
+        totalFallbackCost: 0,
+        totalL2Potential: 0,
+        groupingMode: "payloadHash",
+      });
+    }
   }
 
   const url = new URL(req.url);
@@ -39,6 +61,7 @@ export async function GET(req: Request) {
     where: {
       createdAt: { gte: since },
       model: { not: "" },
+      ...(isSuper ? {} : { apiKeyId: { in: userKeyIds } }),
     },
     _sum: {
       promptTokensOrig: true,
@@ -79,7 +102,10 @@ export async function GET(req: Request) {
   const hashKeys = sortedByCost.map((g) => g.payloadHash).filter(Boolean);
   const samples = hashKeys.length > 0
     ? await prisma.requestLog.findMany({
-        where: { payloadHash: { in: hashKeys } },
+        where: { 
+          payloadHash: { in: hashKeys },
+          ...(isSuper ? {} : { apiKeyId: { in: userKeyIds } })
+        },
         orderBy: { createdAt: "desc" },
         select: { payloadHash: true, originalPayload: true, createdAt: true },
       })

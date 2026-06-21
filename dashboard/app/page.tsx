@@ -7,11 +7,11 @@ import useSWR from "swr";
 import Link from "next/link";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell, ComposedChart, Area } from "recharts";
 import { motion, useMotionValue, useTransform, animate, AnimatePresence } from "framer-motion";
-import { LogOut, Settings, Activity, Sparkles, Database, Clock, Info, PlayCircle, Square, X } from "lucide-react";
+import { PlayCircle, Square, LogOut, Settings, Database, Activity, Info, ChevronDown, Menu, X, Terminal, Search, ShieldAlert, History, DollarSign, BellRing } from "lucide-react";
 import ParticleBackground from "@/components/ParticleBackground";
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
 import { LiveTelemetryGrouped, LiveRequest } from "@/components/LiveTelemetryGrouped";
-import HeaderNav from "@/components/HeaderNav";
+import { Gauge } from "@/components/ServerHealthCard";
 
 const formatJSON = (payload: string) => {
   if (!payload) return "";
@@ -103,6 +103,8 @@ export default function Dashboard() {
   const [totalSavingsReal, setTotalSavingsReal] = useState(0);
 
   const [isRecording, setIsRecording] = useState(false);
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+  const [activeDropdown, setActiveDropdown] = useState<string | null>(null);
   const [sessionStartTime, setSessionStartTime] = useState<number | null>(null);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionResult, setSessionResult] = useState<any>(null);
@@ -380,6 +382,8 @@ export default function Dashboard() {
     { name: 'Standard Routing (no opt)', value: cacheDist.MISS, fill: '#334155' },
   ].filter(d => d.value > 0);
 
+  const totalReqs = cacheDist.MISS + cacheDist.L1 + cacheDist.L2 + cacheDist.L3;
+
   const containerVars = {
     hidden: { opacity: 0 },
     show: {
@@ -406,7 +410,6 @@ export default function Dashboard() {
         <motion.header variants={itemVars} className="mb-10 flex justify-between items-center bg-white/5 border border-white/10 p-6 rounded-2xl backdrop-blur-xl shadow-2xl relative z-50">
           <div className="flex items-center gap-4">
             <div className="w-12 h-12 rounded-full bg-[#0f0f11] border border-white/10 shadow-[0_0_20px_rgba(52,211,153,0.4)] ring-1 ring-emerald-500/30 overflow-hidden flex items-center justify-center">
-              {/* Translate-y moves the image physically down to center the icon */}
               <img src="/logo01.png" alt="Synapse Proxy Icon" className="w-[150%] h-[150%] object-cover max-w-none translate-y-1.5" />
             </div>
             <div>
@@ -415,12 +418,11 @@ export default function Dashboard() {
             </div>
           </div>
 
-          <HeaderNav />
-
-          <div className="flex gap-3 items-center">
+          {/* Desktop Dashboard Actions */}
+          <div className="hidden lg:flex gap-3 items-center">
             <button 
               onClick={handleRecordToggle}
-              className={`flex items-center gap-2 px-5 py-2.5 rounded-xl transition-all border text-sm font-bold ${
+              className={`flex items-center gap-2 px-4 py-2 rounded-xl transition-all border text-sm font-bold ${
                 isRecording 
                   ? "bg-red-500/10 text-red-500 border-red-500/30 animate-pulse shadow-[0_0_20px_rgba(239,68,68,0.2)]" 
                   : "bg-[#0a0a0a] text-gray-400 border-white/5 hover:border-white/10 hover:text-white hover:bg-white/5"
@@ -428,23 +430,179 @@ export default function Dashboard() {
             >
               {isRecording ? <><Square className="w-4 h-4 fill-current" /> Stop Recording</> : <><PlayCircle className="w-4 h-4" /> Record Session</>}
             </button>
-            <Link href="/playground" className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 transition-all shadow-[0_0_20px_rgba(16,185,129,0.2)] hover:shadow-[0_0_30px_rgba(16,185,129,0.4)] text-sm font-bold text-black hover:scale-[1.02] active:scale-95">
+            <Link href="/playground" className="flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 transition-all shadow-[0_0_20px_rgba(16,185,129,0.2)] hover:shadow-[0_0_30px_rgba(16,185,129,0.4)] text-sm font-bold text-black hover:scale-[1.02] active:scale-95">
               <Database className="w-4 h-4" /> Playground
             </Link>
-            <Link href="/benchmark" className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#0a0a0a] hover:bg-white/5 transition-all border border-white/5 hover:border-white/10 text-sm font-bold text-gray-400 hover:text-white">
+            <Link href="/benchmark" className="flex items-center gap-2 px-4 py-2 rounded-xl bg-[#0a0a0a] hover:bg-white/5 transition-all border border-white/5 hover:border-white/10 text-sm font-bold text-gray-400 hover:text-white">
               <Activity className="w-4 h-4" /> Benchmark
             </Link>
-            <Link href="/settings" className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#0a0a0a] hover:bg-white/5 transition-all border border-white/5 hover:border-white/10 text-sm font-bold text-gray-400 hover:text-white">
-              <Settings className="w-4 h-4" /> Settings
+
+            {/* Tools Dropdown */}
+            <div
+              className="relative group py-2"
+              onMouseEnter={() => setActiveDropdown("tools")}
+              onMouseLeave={() => setActiveDropdown(null)}
+            >
+              <button className="flex items-center gap-1.5 px-2 text-gray-400 hover:text-white transition-all font-bold focus:outline-none">
+                Tools
+                <ChevronDown className={`w-3.5 h-3.5 transition-transform duration-300 ${activeDropdown === "tools" ? 'rotate-180 text-emerald-400' : ''}`} />
+              </button>
+              
+              <div className="absolute top-full right-0 mt-2 w-64 bg-[#0c0c0e]/95 border border-white/10 rounded-2xl p-2 shadow-2xl backdrop-blur-xl opacity-0 translate-y-2 pointer-events-none group-hover:opacity-100 group-hover:translate-y-0 group-hover:pointer-events-auto transition-all duration-300 z-50 before:content-[''] before:absolute before:-top-2 before:left-0 before:right-0 before:h-2">
+                <div className="space-y-1">
+                  <Link href="/explorer" className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-all text-left group/item text-blue-400">
+                    <Search className="w-4 h-4" />
+                    <span className="text-sm font-bold">Request Explorer</span>
+                  </Link>
+                  <Link href="/expensive" className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-all text-left group/item text-orange-400">
+                    <ShieldAlert className="w-4 h-4" />
+                    <span className="text-sm font-bold">Expensive Prompts</span>
+                  </Link>
+                  <Link href="/sessions" className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-all text-left group/item text-emerald-400">
+                    <History className="w-4 h-4" />
+                    <span className="text-sm font-bold">Session History</span>
+                  </Link>
+                  <Link href="/pricing" className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-all text-left group/item text-amber-400">
+                    <DollarSign className="w-4 h-4" />
+                    <span className="text-sm font-bold">Pricing Coverage</span>
+                  </Link>
+                  <Link href="/alerts" className="flex items-center gap-3 p-2.5 rounded-xl hover:bg-white/5 transition-all text-left group/item text-rose-400">
+                    <BellRing className="w-4 h-4" />
+                    <span className="text-sm font-bold">Alert Rules</span>
+                  </Link>
+                </div>
+              </div>
+            </div>
+
+            <Link href="/settings" className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#0a0a0a] hover:bg-white/5 transition-all border border-white/5 hover:border-white/10 text-sm font-bold text-gray-400 hover:text-white" title="Settings">
+              <Settings className="w-4 h-4" />
             </Link>
             <button 
               onClick={() => signOut()}
-              className="flex items-center gap-2 px-5 py-2.5 rounded-xl bg-[#0a0a0a] hover:bg-red-500/10 transition-all border border-white/5 hover:border-red-500/30 text-sm font-bold text-gray-500 hover:text-red-400"
+              className="flex items-center gap-2 px-3 py-2 rounded-xl bg-[#0a0a0a] hover:bg-red-500/10 transition-all border border-white/5 hover:border-red-500/30 text-sm font-bold text-gray-500 hover:text-red-400"
+              title="Sign Out"
             >
-              <LogOut className="w-4 h-4" /> Sign Out
+              <LogOut className="w-4 h-4" />
             </button>
           </div>
+
+          {/* Mobile Menu Toggle Button */}
+          <button 
+            className="lg:hidden p-2 text-gray-400 hover:text-white focus:outline-none z-50 relative"
+            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
+          >
+            {isMobileMenuOpen ? <X className="w-6 h-6" /> : <Menu className="w-6 h-6" />}
+          </button>
+
+          {/* Mobile Dashboard Menu Overlay */}
+          {isMobileMenuOpen && (
+            <div className="fixed inset-0 bg-[#050505]/95 backdrop-blur-xl z-40 overflow-y-auto lg:hidden pt-24 pb-10 px-6 border-t border-white/5 mt-20">
+              <div className="flex flex-col gap-4 max-w-sm mx-auto">
+                <button 
+                  onClick={() => { handleRecordToggle(); setIsMobileMenuOpen(false); }}
+                  className={`flex items-center justify-center gap-2 p-3 rounded-xl transition-all border text-sm font-bold ${
+                    isRecording 
+                      ? "bg-red-500/10 text-red-500 border-red-500/30" 
+                      : "bg-[#0a0a0a] text-gray-400 border-white/5"
+                  }`}
+                >
+                  {isRecording ? <><Square className="w-4 h-4 fill-current" /> Stop Recording</> : <><PlayCircle className="w-4 h-4" /> Record Session</>}
+                </button>
+                <Link href="/playground" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center justify-center gap-2 p-3 rounded-xl bg-emerald-500 text-black font-bold">
+                  <Database className="w-4 h-4" /> Playground
+                </Link>
+                <Link href="/benchmark" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center justify-center gap-2 p-3 rounded-xl bg-white/5 border border-white/10 text-white font-bold">
+                  <Activity className="w-4 h-4" /> Benchmark
+                </Link>
+
+                <div className="pt-4 border-t border-white/10 mt-2 space-y-2">
+                  <h3 className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-3">Tools</h3>
+                  <Link href="/explorer" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10 text-blue-400 font-bold">
+                    <Search className="w-4 h-4" /> Request Explorer
+                  </Link>
+                  <Link href="/expensive" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10 text-orange-400 font-bold">
+                    <ShieldAlert className="w-4 h-4" /> Expensive Prompts
+                  </Link>
+                  <Link href="/sessions" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10 text-emerald-400 font-bold">
+                    <History className="w-4 h-4" /> Session History
+                  </Link>
+                  <Link href="/pricing" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10 text-amber-400 font-bold">
+                    <DollarSign className="w-4 h-4" /> Pricing Coverage
+                  </Link>
+                  <Link href="/alerts" onClick={() => setIsMobileMenuOpen(false)} className="flex items-center gap-3 p-3 rounded-xl bg-white/5 border border-white/10 text-rose-400 font-bold">
+                    <BellRing className="w-4 h-4" /> Alert Rules
+                  </Link>
+                </div>
+
+                <div className="pt-4 border-t border-white/10 mt-2 flex gap-3">
+                  <Link href="/settings" onClick={() => setIsMobileMenuOpen(false)} className="flex-1 flex justify-center items-center gap-2 p-3 rounded-xl bg-white/5 border border-white/10 text-gray-400 hover:text-white font-bold">
+                    <Settings className="w-4 h-4" /> Settings
+                  </Link>
+                  <button 
+                    onClick={() => { signOut(); setIsMobileMenuOpen(false); }}
+                    className="flex-1 flex justify-center items-center gap-2 p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-400 font-bold"
+                  >
+                    <LogOut className="w-4 h-4" /> Sign Out
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </motion.header>
+
+        <motion.div variants={itemVars} className="mb-6">
+          <div className="flex items-center justify-between mb-4">
+            <div>
+              <h2 className="text-cyan-400 text-xs font-black tracking-[0.25em] uppercase drop-shadow-[0_0_8px_rgba(34,211,238,0.5)]">
+                Live Telemetry
+              </h2>
+              <p className="text-zinc-500 text-xs mt-1">
+                Streaming every 5s {"\u00b7"} user aggregates
+              </p>
+            </div>
+          </div>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
+            <Gauge
+              label="Hit Rate"
+              value={hitRate}
+              max={100}
+              unit="%"
+              color="emerald"
+            />
+            <Gauge
+              label="L1"
+              value={cacheDist.L1}
+              max={Math.max(1, totalReqs)}
+              color="blue"
+            />
+            <Gauge
+              label="L2"
+              value={cacheDist.L2}
+              max={Math.max(1, totalReqs)}
+              color="emerald"
+            />
+            <Gauge
+              label="L3"
+              value={cacheDist.L3}
+              max={Math.max(1, totalReqs)}
+              color="purple"
+            />
+            <Gauge
+              label="Total Reqs"
+              value={totalReqs}
+              max={Math.max(1, totalReqs)}
+              color="cyan"
+            />
+            <Gauge
+              label="$ Saved"
+              value={totalSaved}
+              max={Math.max(0.01, totalSaved)}
+              unit="$"
+              color="amber"
+              formatter={(v) => v.toFixed(3)}
+            />
+          </div>
+        </motion.div>
 
         <motion.div variants={itemVars} className="grid grid-cols-1 lg:grid-cols-3 gap-8 mb-8">
           {/* Value Saved Card */}

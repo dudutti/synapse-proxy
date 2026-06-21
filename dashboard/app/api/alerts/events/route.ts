@@ -12,15 +12,23 @@ export const dynamic = "force-dynamic";
 
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session?.user) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
+
+  const user = session.user as any;
+  const isSuper = user.role === "SUPERADMIN";
+  const targetUserId = isSuper ? "global" : user.id;
 
   const url = new URL(req.url);
   const unackedOnly = url.searchParams.get("unacked") === "1";
 
+  const whereClause: any = {};
+  if (unackedOnly) whereClause.acknowledged = false;
+  if (!isSuper) whereClause.rule = { userId: targetUserId };
+
   const events = await prisma.alertEvent.findMany({
-    where: unackedOnly ? { acknowledged: false } : undefined,
+    where: whereClause,
     orderBy: { firedAt: "desc" },
     take: 100,
   });
@@ -32,13 +40,22 @@ export async function GET(req: Request) {
 // body: { id: string, by: string }
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session?.user) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
+
+  const user = session.user as any;
+  const isSuper = user.role === "SUPERADMIN";
 
   const { id, by } = await req.json();
   if (!id) {
     return NextResponse.json({ error: "id required" }, { status: 400 });
+  }
+
+  const existing = await prisma.alertEvent.findUnique({ where: { id }, include: { rule: true } });
+  if (!existing) return new NextResponse("Not Found", { status: 404 });
+  if (!isSuper && existing.rule.userId !== user.id) {
+    return new NextResponse("Forbidden", { status: 403 });
   }
 
   const event = await prisma.alertEvent.update({

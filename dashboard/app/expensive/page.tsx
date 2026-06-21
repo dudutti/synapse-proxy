@@ -18,10 +18,10 @@ export default function ExpensivePromptsPage() {
             </p>
           </div>
           <a
-            href="/admin"
+            href="/"
             className="text-xs text-zinc-500 hover:text-white px-3 py-1.5 rounded-lg border border-white/10 bg-white/5"
           >
-            ← Back to admin
+            ← Back to dashboard
           </a>
         </header>
         <ExpensivePromptsPanel />

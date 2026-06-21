@@ -159,6 +159,7 @@ model BenchmarkLog {
 
 model ProviderModel {
   id                       String   @id @default(cuid())
+  userId                   String   @default("global") // "global" for system-wide, or a User.id for overrides
   provider                 String
   modelName                String
   costPromptPer1M          Float
@@ -168,7 +169,7 @@ model ProviderModel {
   createdAt                DateTime @default(now())
   updatedAt                DateTime @updatedAt
 
-  @@unique([provider, modelName])
+  @@unique([provider, modelName, userId])
 }
 
 model Prospect {
@@ -192,6 +193,7 @@ model EmailTemplate {
 
 model AlertRule {
   id          String   @id @default(cuid())
+  userId      String   @default("global") // "global" for system-wide, or a User.id
   name        String   // human label, e.g. "Panic rate > 0"
   metric      String   // panic_rate | error_rate | cache_hit_rate | upstream_latency_p95 | pricing_gaps
   operator    String   // gt | lt | gte | lte

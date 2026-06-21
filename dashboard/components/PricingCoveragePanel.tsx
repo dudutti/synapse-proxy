@@ -55,7 +55,7 @@ export function PricingCoveragePanel() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch("/api/admin/pricing-coverage", { cache: "no-store" });
+      const r = await fetch("/api/pricing", { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
       setGaps(j.gaps || []);
@@ -82,7 +82,7 @@ export function PricingCoveragePanel() {
     setLoading(true);
     for (const g of gaps) {
       const sugg = lookupSuggestion(g.provider, g.model);
-      await fetch("/api/admin/pricing-coverage", {
+      await fetch("/api/pricing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -257,7 +257,7 @@ function FixModal({
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch("/api/admin/pricing-coverage", {
+      const res = await fetch("/api/pricing", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({

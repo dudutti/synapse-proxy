@@ -86,8 +86,8 @@ export function AlertRulesPanel() {
   const fetchAll = useCallback(async () => {
     try {
       const [r, e] = await Promise.all([
-        fetch("/api/admin/alerts", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/admin/alerts/events?unacked=1", { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/alerts", { cache: "no-store" }).then((r) => r.json()),
+        fetch("/api/alerts/events?unacked=1", { cache: "no-store" }).then((r) => r.json()),
       ]);
       setRules(r.rules || []);
       setUnackedCount(r.unackedCount || 0);
@@ -104,7 +104,7 @@ export function AlertRulesPanel() {
   }, [fetchAll]);
 
   const createRule = async (data: any) => {
-    const res = await fetch("/api/admin/alerts", {
+    const res = await fetch("/api/alerts", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -121,7 +121,7 @@ export function AlertRulesPanel() {
   };
 
   const updateRule = async (id: string, data: any) => {
-    const res = await fetch(`/api/admin/alerts/${id}`, {
+    const res = await fetch(`/api/alerts/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(data),
@@ -138,12 +138,12 @@ export function AlertRulesPanel() {
 
   const deleteRule = async (id: string) => {
     if (!confirm("Delete this alert rule?")) return;
-    await fetch(`/api/admin/alerts/${id}`, { method: "DELETE" });
+    await fetch(`/api/alerts/${id}`, { method: "DELETE" });
     fetchAll();
   };
 
   const ackEvent = async (id: string) => {
-    await fetch("/api/admin/alerts/events", {
+    await fetch("/api/alerts/events", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ id }),

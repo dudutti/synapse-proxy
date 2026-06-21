@@ -41,7 +41,7 @@ export function ExpensivePromptsPanel() {
   const fetchRows = useCallback(async () => {
     setLoading(true);
     try {
-      const r = await fetch(`/api/admin/expensive-prompts?windowHours=${windowHours}`, { cache: "no-store" });
+      const r = await fetch(`/api/expensive?windowHours=${windowHours}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
       setRows(j.rows || []);

@@ -13,8 +13,17 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session?.user) {
     return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  const user = session.user as any;
+  const isSuper = user.role === "SUPERADMIN";
+
+  const existing = await prisma.alertRule.findUnique({ where: { id: params.id } });
+  if (!existing) return new NextResponse("Not Found", { status: 404 });
+  if (!isSuper && existing.userId !== user.id) {
+    return new NextResponse("Forbidden", { status: 403 });
   }
 
   const body = await req.json();
@@ -36,8 +45,17 @@ export async function DELETE(
   { params }: { params: { id: string } }
 ) {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session?.user) {
     return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  const user = session.user as any;
+  const isSuper = user.role === "SUPERADMIN";
+
+  const existing = await prisma.alertRule.findUnique({ where: { id: params.id } });
+  if (!existing) return new NextResponse("Not Found", { status: 404 });
+  if (!isSuper && existing.userId !== user.id) {
+    return new NextResponse("Forbidden", { status: 403 });
   }
 
   await prisma.alertRule.delete({ where: { id: params.id } });

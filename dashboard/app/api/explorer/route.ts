@@ -28,8 +28,29 @@ const MAX_LIMIT = 200;
 
 export async function GET(req: NextRequest) {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session?.user) {
     return new NextResponse("Unauthorized", { status: 401 });
+  }
+
+  const user = session.user as any;
+  const isSuper = user.role === "SUPERADMIN";
+
+  // If not superadmin, fetch the user's API keys so we can restrict the query
+  let userKeyIds: string[] = [];
+  if (!isSuper) {
+    const keys = await prisma.apiKey.findMany({
+      where: { userId: user.id },
+      select: { id: true }
+    });
+    userKeyIds = keys.map(k => k.id);
+    if (userKeyIds.length === 0) {
+      // User has no keys, so they have no logs
+      return NextResponse.json({
+        rows: [],
+        pagination: { page: 1, limit: 50, total: 0, totalPages: 0 },
+        aggregate: { count: 0, tokensSaved: 0, totalCostSaved: 0 },
+      });
+    }
   }
 
   const url = new URL(req.url);
@@ -71,14 +92,21 @@ export async function GET(req: NextRequest) {
 
   const virtualKey = sp.get("virtualKey")?.trim();
   if (virtualKey) {
-    // apiKeyId is a cuid, but the user usually types the virtualKey
-    // string (sk-opti-...). Look up the ApiKey first.
+    const keyWhere: any = { virtualKey: { startsWith: virtualKey } };
+    if (!isSuper) keyWhere.userId = user.id;
+
     const key = await prisma.apiKey.findFirst({
-      where: { virtualKey: { startsWith: virtualKey } },
+      where: keyWhere,
       select: { id: true },
     });
-    if (key) where.apiKeyId = key.id;
-    else where.apiKeyId = "__no_match__"; // force empty result
+    if (key) {
+      where.apiKeyId = key.id;
+    } else {
+      where.apiKeyId = "__no_match__";
+    }
+  } else if (!isSuper) {
+    // If no virtualKey filter, restrict to ALL of the user's keys
+    where.apiKeyId = { in: userKeyIds };
   }
 
   const from = sp.get("from");

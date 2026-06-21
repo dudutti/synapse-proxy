@@ -112,7 +112,7 @@ export function RequestExplorer() {
     setLoading(true);
     const t0 = performance.now();
     try {
-      const r = await fetch(`/api/admin/explorer?${buildQs()}`, { cache: "no-store" });
+      const r = await fetch(`/api/explorer?${buildQs()}`, { cache: "no-store" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const j = await r.json();
       setRows(j.rows || []);
@@ -316,7 +316,7 @@ function RequestDetailDrawer({ id, onClose }: { id: string; onClose: () => void 
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
-    fetch(`/api/admin/explorer/${id}`, { cache: "no-store" })
+    fetch(`/api/explorer/${id}`, { cache: "no-store" })
       .then((r) => r.json())
       .then((j) => {
         if (!cancelled) {
