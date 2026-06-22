@@ -204,10 +204,12 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// The hit is logged for telemetry; full body-rewriting is left to
 	// future work since it requires tool-output mapping in the messages
 	// array.
-toolCalls := optiagent.ExtractToolCalls(bodyBytes)
+	fileToolCalls := optiagent.ExtractToolCalls(bodyBytes)
+	allToolCalls := optiagent.ExtractAllToolCalls(bodyBytes)
+
 	toolCallsStr := ""
-	if len(toolCalls) > 0 {
-		tcJSON, _ := json.Marshal(toolCalls)
+	if len(allToolCalls) > 0 {
+		tcJSON, _ := json.Marshal(allToolCalls)
 		toolCallsStr = string(tcJSON)
 
 		// Auto-discover: log every tool the agent has called at
@@ -223,7 +225,7 @@ toolCalls := optiagent.ExtractToolCalls(bodyBytes)
 		// deploys but eventually forgets abandoned agents.
 		if rdb != nil && virtualKey != "" {
 			discoverKey := "synapse:discovered_tools:" + virtualKey
-			for _, tc := range toolCalls {
+			for _, tc := range allToolCalls {
 				if tc.ToolName == "" {
 					continue
 				}
@@ -239,7 +241,7 @@ toolCalls := optiagent.ExtractToolCalls(bodyBytes)
 	// also keep the original AllowList behaviour for backwards
 	// compatibility — if `AllowedTools` is set, we still apply the
 	// strict whitelist (the user opted into strict mode).
-	if rdb != nil && virtualKey != "" && len(toolCalls) > 0 && !keyConfig.BlockUnknownTools {
+	if rdb != nil && virtualKey != "" && len(allToolCalls) > 0 && !keyConfig.BlockUnknownTools {
 		denyKey := "synapse:denied_tools:" + virtualKey
 		denied, _ := rdb.SMembers(ctx, denyKey).Result()
 		if len(denied) > 0 {
@@ -247,7 +249,7 @@ toolCalls := optiagent.ExtractToolCalls(bodyBytes)
 			for _, d := range denied {
 				denyMap[d] = true
 			}
-			for _, tc := range toolCalls {
+			for _, tc := range allToolCalls {
 				if denyMap[tc.ToolName] {
 					w.Header().Set("Content-Type", "application/json")
 					w.WriteHeader(http.StatusForbidden)
@@ -259,13 +261,13 @@ toolCalls := optiagent.ExtractToolCalls(bodyBytes)
 	}
 
 // Agent Firewall - Tool Filtering
-	if keyConfig.BlockUnknownTools && keyConfig.AllowedTools != "" && len(toolCalls) > 0 {
+	if keyConfig.BlockUnknownTools && keyConfig.AllowedTools != "" && len(allToolCalls) > 0 {
 		allowed := strings.Split(keyConfig.AllowedTools, ",")
 		allowedMap := make(map[string]bool)
 		for _, a := range allowed {
 			allowedMap[strings.TrimSpace(a)] = true
 		}
-		for _, tc := range toolCalls {
+		for _, tc := range allToolCalls {
 			if !allowedMap[tc.ToolName] {
 				w.Header().Set("Content-Type", "application/json")
 				w.WriteHeader(http.StatusBadRequest)
@@ -307,9 +309,9 @@ toolCalls := optiagent.ExtractToolCalls(bodyBytes)
 			return
 		}
 	}
-	if len(toolCalls) > 0 {
+	if len(fileToolCalls) > 0 {
 		toolDedupTTL := 5 * time.Minute
-		toolDedup := optiagent.CheckToolDedup(ctx, rdb, virtualKey, toolCalls, bodyBytes, toolDedupTTL)
+		toolDedup := optiagent.CheckToolDedup(ctx, rdb, virtualKey, fileToolCalls, bodyBytes, toolDedupTTL)
 		if toolDedup.HasDup {
 			log.Printf("[ProxyHandler] TOOL DEDUP HIT: %s re-read of %q (cached body %d bytes)",
 				toolDedup.ToolName, toolDedup.FilePath, len(toolDedup.ReuseBody))
@@ -330,7 +332,7 @@ toolCalls := optiagent.ExtractToolCalls(bodyBytes)
 	// L2's cosine-distance matching would happily return a response
 	// from a *different* turn, corrupting the agent's state. L3
 	// (compression) is the right tool here, not L2.
-	forceDisableL2 := sessionID != "" || len(toolCalls) > 0
+	forceDisableL2 := sessionID != "" || len(allToolCalls) > 0
 
 	// L0: request deduplication for identical in-flight requests.
 	// Two parallel callers hitting the proxy with the same payload
@@ -491,28 +493,20 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 
 	// Soft-loop self-correction hint: cache missed AND fingerprint observed. See
 	// docs/agent_firewall.md for the strategy.
-	if fpCount := w.Header().Get("X-Synapse-Fingerprint-Count"); fpCount != "" && !keyConfig.KillSwitch {
+	if fpCount := w.Header().Get("X-Synapse-Fingerprint-Count"); fpCount != "" && keyConfig.FingerprintLoopDetect && !keyConfig.KillSwitch {
 		count, _ := strconv.Atoi(fpCount)
 		if count >= optiagent.FingerprintThreshold {
 			fpTool := w.Header().Get("X-Synapse-Fingerprint-Tool")
-			log.Printf("[ProxyHandler] SOFT LOOP BLOCK: tool=%s count=%d (vk=%s) — cache miss, returning self-correction hint",
+			log.Printf("[ProxyHandler] SOFT LOOP INJECTION: tool=%s count=%d (vk=%s) — injecting warning into prompt and continuing",
 				fpTool, count, virtualKey)
 
-			hintBytes := makeSelfCorrectionResponse(fpTool, reqModel)
-			if wantStream {
-				streamCachedResponse(w, hintBytes, reqModel)
-			} else {
-				w.Header().Set("Content-Type", "application/json")
-				w.Write(hintBytes)
-			}
+			// Modify optResult.Payload to inject the warning
+			optResult.Payload = injectSystemWarning(optResult.Payload, fpTool)
+			optResult.PromptTokensOpt += 40 // approximate token cost of the warning
 
-			go workers.PushTelemetry(virtualKey, provider, reqModel,
-				optResult.PromptTokensOrig, 0, optResult.PromptTokensOpt, 0, 0,
-				"NONE", time.Since(startTime), string(bodyBytes), string(optResult.Payload), `{"error":"fingerprint_loop_hint","tool":"`+fpTool+`","count":`+fpCount+`}`,
-				0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog,
-				toolCallsStr, keyConfig.LimitExceeded, false,
-				turnCount, convSignature)
-			return
+			// We do NOT return here. We let the modified payload flow upstream!
+			// We clear the fpCount so we don't trigger this again on the same request
+			w.Header().Del("X-Synapse-Fingerprint-Count")
 		}
 	}
 
@@ -610,7 +604,7 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 			req.Header.Set("Authorization", "Bearer "+currentRealKey)
 		}
 
-		client := &http.Client{Timeout: 90 * time.Second}
+		client := &http.Client{Timeout: 600 * time.Second}
 		upstreamStart := time.Now()
 		resp, doErr := client.Do(req)
 		// Record latency bucket for the Prometheus /metrics endpoint.
@@ -1191,7 +1185,8 @@ func streamCachedResponse(w http.ResponseWriter, cachedResp []byte, model string
 	var parsed struct {
 		Choices []struct {
 			Message struct {
-				Content string `json:"content"`
+				Content   string                   `json:"content"`
+				ToolCalls []map[string]interface{} `json:"tool_calls"`
 			} `json:"message"`
 		} `json:"choices"`
 	}
@@ -1202,17 +1197,59 @@ func streamCachedResponse(w http.ResponseWriter, cachedResp []byte, model string
 	}
 
 	content := parsed.Choices[0].Message.Content
-	runes := []rune(content)
-	chunkSize := 15
-	for i := 0; i < len(runes); i += chunkSize {
-		end := i + chunkSize
-		if end > len(runes) {
-			end = len(runes)
+	toolCalls := parsed.Choices[0].Message.ToolCalls
+
+	if len(toolCalls) > 0 {
+		// Format tool calls for streaming by injecting the "index" property
+		for i, tc := range toolCalls {
+			tc["index"] = i
 		}
-		chunkText := string(runes[i:end])
 		chunk := map[string]interface{}{
+			"id":      "chatcmpl-cached",
+			"object":  "chat.completion.chunk",
+			"created": time.Now().Unix(),
 			"choices": []map[string]interface{}{
-				{"delta": map[string]string{"content": chunkText}, "index": 0},
+				{"delta": map[string]interface{}{
+					"role":       "assistant",
+					"content":    content,
+					"tool_calls": toolCalls,
+				}, "index": 0},
+			},
+			"model": model,
+		}
+		data, _ := json.Marshal(chunk)
+		fmt.Fprintf(w, "data: %s\n\n", data)
+		flusher.Flush()
+	} else if content != "" {
+		runes := []rune(content)
+		chunkSize := 15
+		for i := 0; i < len(runes); i += chunkSize {
+			end := i + chunkSize
+			if end > len(runes) {
+				end = len(runes)
+			}
+			chunkText := string(runes[i:end])
+			chunk := map[string]interface{}{
+				"id":      "chatcmpl-cached",
+				"object":  "chat.completion.chunk",
+				"created": time.Now().Unix(),
+				"choices": []map[string]interface{}{
+					{"delta": map[string]string{"content": chunkText}, "index": 0},
+				},
+				"model": model,
+			}
+			data, _ := json.Marshal(chunk)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+	} else {
+		// Empty content, no tools
+		chunk := map[string]interface{}{
+			"id":      "chatcmpl-cached",
+			"object":  "chat.completion.chunk",
+			"created": time.Now().Unix(),
+			"choices": []map[string]interface{}{
+				{"delta": map[string]string{"content": ""}, "index": 0},
 			},
 			"model": model,
 		}
@@ -1221,10 +1258,18 @@ func streamCachedResponse(w http.ResponseWriter, cachedResp []byte, model string
 		flusher.Flush()
 	}
 	
+	finishReason := "stop"
+	if len(toolCalls) > 0 {
+		finishReason = "tool_calls"
+	}
+
 	// Send the final chunk with finish_reason
 	finalChunk := map[string]interface{}{
+		"id":      "chatcmpl-cached",
+		"object":  "chat.completion.chunk",
+		"created": time.Now().Unix(),
 		"choices": []map[string]interface{}{
-			{"delta": map[string]string{}, "index": 0, "finish_reason": "stop"},
+			{"delta": map[string]string{}, "index": 0, "finish_reason": finishReason},
 		},
 		"model": model,
 	}
@@ -1561,6 +1606,52 @@ func makeSelfCorrectionResponse(toolName string, model string) []byte {
 			},
 		},
 	}
-	bytes, _ := json.Marshal(respObj)
-	return bytes
+	respBytes, _ := json.Marshal(respObj)
+	return respBytes
+}
+
+// injectSystemWarning appends a system warning to the last message in the payload
+// to nudge the LLM out of a tool loop without stopping the agent framework.
+func injectSystemWarning(payload []byte, toolName string) []byte {
+	var body map[string]interface{}
+	if err := json.Unmarshal(payload, &body); err != nil {
+		return payload
+	}
+	messagesRaw, ok := body["messages"].([]interface{})
+	if !ok || len(messagesRaw) == 0 {
+		return payload
+	}
+
+	lastMsgRaw := messagesRaw[len(messagesRaw)-1]
+	lastMsg, ok := lastMsgRaw.(map[string]interface{})
+	if !ok {
+		return payload
+	}
+
+	warningText := fmt.Sprintf("\n\n[SYSTEM WARNING: The proxy intercepted your request because you are caught in a loop. You have repeated the tool '%s' with identical arguments too many times. You MUST change your strategy immediately. Do not repeat the same action.]", toolName)
+
+	// Try to append to string content
+	if contentStr, ok := lastMsg["content"].(string); ok {
+		lastMsg["content"] = contentStr + warningText
+	} else if contentArr, ok := lastMsg["content"].([]interface{}); ok {
+		// It's an array of content blocks (OpenAI vision or Anthropic style)
+		contentArr = append(contentArr, map[string]interface{}{
+			"type": "text",
+			"text": warningText,
+		})
+		lastMsg["content"] = contentArr
+	} else {
+		// Fallback: append a user message
+		warningMsg := map[string]interface{}{
+			"role": "user",
+			"content": warningText,
+		}
+		body["messages"] = append(messagesRaw, warningMsg)
+	}
+
+	newPayload, err := json.Marshal(body)
+	if err != nil {
+		return payload
+	}
+	return newPayload
 }

@@ -9,6 +9,12 @@ interface Section {
   desc: string;
   items: string[];
   color: string;
+  price?: string;
+  cta?: string;
+  href?: string;
+  highlight?: boolean;
+  mediaUrl?: string;
+  mediaSize?: string;
 }
 
 interface TableRow {
@@ -34,12 +40,56 @@ interface ContentState {
   videoTitle: string;
   videoDesc: string;
   videoAlt: string;
+  videoUrl?: string;
   videoConsoleTitle?: string;
   videoConsoleItems?: string[];
   table?: Table;
 }
 
+function FileUploader({ value, onChange, label }: { value: string | undefined; onChange: (v: string) => void; label: string }) {
+  const [uploading, setUploading] = useState(false);
+  
+  const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files?.[0]) return;
+    const file = e.target.files[0];
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch("/api/admin/upload", { method: "POST", body: formData });
+      if (!res.ok) throw new Error("Upload failed");
+      const data = await res.json();
+      onChange(data.url);
+      toast.success("Fichier uploadé !");
+    } catch (err) {
+      toast.error("Erreur d'upload");
+    } finally {
+      setUploading(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-col gap-2">
+      <label className="block text-xs font-bold text-gray-400 uppercase">{label}</label>
+      <div className="flex items-center gap-2">
+        <input 
+          type="text" 
+          value={value || ""} 
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="/uploads/..."
+          className="flex-1 bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500" 
+        />
+        <label className="shrink-0 px-4 py-2.5 bg-emerald-500/10 hover:bg-emerald-500/20 text-emerald-400 border border-emerald-500/20 rounded-xl text-xs font-bold cursor-pointer transition-colors">
+          {uploading ? "..." : "Uploader"}
+          <input type="file" className="hidden" accept="video/mp4,image/webp,image/png,image/jpeg" onChange={handleUpload} disabled={uploading} />
+        </label>
+      </div>
+    </div>
+  );
+}
+
 const PAGES_LIST = [
+  { key: "pricing", name: "Tarifs (Page Publique)" },
   { key: "caching", name: "Cache Multi-Niveaux (Landing)" },
   { key: "firewall", name: "Agentic Firewall (Landing)" },
   { key: "compression", name: "Compression de Contexte (Landing)" },
@@ -95,6 +145,7 @@ export default function AdminContentPage() {
         videoTitle: data.videoTitle || "",
         videoDesc: data.videoDesc || "",
         videoAlt: data.videoAlt || "",
+        videoUrl: data.videoUrl || "",
         videoConsoleTitle: data.videoConsoleTitle || "",
         videoConsoleItems: data.videoConsoleItems || [],
         table: data.table || undefined,
@@ -150,7 +201,7 @@ export default function AdminContentPage() {
       ...prev,
       sections: [
         ...prev.sections,
-        { title: "Nouveau titre", desc: "Nouvelle description", items: [], color: "emerald" },
+        { title: "Nouveau titre", desc: "Nouvelle description", items: [], color: "emerald", mediaSize: "medium" },
       ],
     }));
   };
@@ -489,8 +540,52 @@ export default function AdminContentPage() {
                       />
                     </div>
 
+                    {selectedPage === "pricing" && (
+                      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 bg-emerald-500/5 p-3 rounded-xl border border-emerald-500/20">
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Prix (ex: 49)</label>
+                          <input type="text" value={sec.price || ""} onChange={(e) => handleSectionChange(idx, "price", e.target.value)} className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none" />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Bouton CTA</label>
+                          <input type="text" value={sec.cta || ""} onChange={(e) => handleSectionChange(idx, "cta", e.target.value)} className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none" />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-gray-500 uppercase mb-1">Lien (href)</label>
+                          <input type="text" value={sec.href || ""} onChange={(e) => handleSectionChange(idx, "href", e.target.value)} className="w-full bg-black/40 border border-white/10 rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none" />
+                        </div>
+                        <div className="flex items-center gap-2 mt-6">
+                          <input type="checkbox" checked={!!sec.highlight} onChange={(e) => handleSectionChange(idx, "highlight", e.target.checked)} className="w-4 h-4 accent-emerald-500" />
+                          <label className="text-[10px] font-bold text-emerald-400 uppercase">Mettre en avant</label>
+                        </div>
+                      </div>
+                    )}
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4 border-t border-white/5 pt-4">
+                      <div>
+                        <FileUploader 
+                          label="Média de la section (Video/Image)" 
+                          value={sec.mediaUrl} 
+                          onChange={(v) => handleSectionChange(idx, "mediaUrl", v)} 
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-bold text-gray-400 uppercase mb-2">Taille d'affichage</label>
+                        <select
+                          value={sec.mediaSize || "medium"}
+                          onChange={(e) => handleSectionChange(idx, "mediaSize", e.target.value)}
+                          className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none"
+                        >
+                          <option value="small">Petit</option>
+                          <option value="medium">Moyen</option>
+                          <option value="large">Grand</option>
+                          <option value="full">Pleine largeur</option>
+                        </select>
+                      </div>
+                    </div>
+
                     {/* Bullet points sub list */}
-                    <div className="space-y-2 pl-4 border-l border-white/10">
+                    <div className="space-y-2 pl-4 border-l border-white/10 mt-4">
                       <div className="flex items-center justify-between">
                         <label className="block text-[10px] font-bold text-gray-400 uppercase">Points Clés / Liste à puces</label>
                         <button
@@ -556,6 +651,14 @@ export default function AdminContentPage() {
                 onChange={(e) => updateField("videoDesc", e.target.value)}
                 rows={2}
                 className="w-full bg-black/40 border border-white/10 rounded-xl p-4 text-xs text-white focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+
+            <div className="pt-2 border-t border-white/5 mt-4">
+              <FileUploader 
+                label="Fichier Média Principal (Video/Image)" 
+                value={state.videoUrl} 
+                onChange={(v) => updateField("videoUrl", v)} 
               />
             </div>
 

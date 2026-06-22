@@ -1,0 +1,14 @@
+G:\Optitoken\proxy\rust-embedder\target_antigravity\release\deps\serde-a4bfda805113db26.d: C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs G:\Optitoken\proxy\rust-embedder\target_antigravity\release\build\serde-61dd1a266867dcef\out/private.rs
+
+G:\Optitoken\proxy\rust-embedder\target_antigravity\release\deps\libserde-a4bfda805113db26.rlib: C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs G:\Optitoken\proxy\rust-embedder\target_antigravity\release\build\serde-61dd1a266867dcef\out/private.rs
+
+G:\Optitoken\proxy\rust-embedder\target_antigravity\release\deps\libserde-a4bfda805113db26.rmeta: C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs G:\Optitoken\proxy\rust-embedder\target_antigravity\release\build\serde-61dd1a266867dcef\out/private.rs
+
+C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\lib.rs:
+C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\integer128.rs:
+C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\mod.rs:
+C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\de.rs:
+C:\Users\dudut\.cargo\registry\src\index.crates.io-1949cf8c6b5b557f\serde-1.0.228\src\private\ser.rs:
+G:\Optitoken\proxy\rust-embedder\target_antigravity\release\build\serde-61dd1a266867dcef\out/private.rs:
+
+# env-dep:OUT_DIR=G:\\Optitoken\\proxy\\rust-embedder\\target_antigravity\\release\\build\\serde-61dd1a266867dcef\\out

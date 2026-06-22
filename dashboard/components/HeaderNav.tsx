@@ -113,6 +113,20 @@ export default function HeaderNav() {
           </div>
         ))}
 
+        {/* Pricing & Blog Links Desktop */}
+        <Link 
+          href="/blog" 
+          className="flex items-center gap-1.5 text-gray-400 hover:text-emerald-400 transition-all font-bold focus:outline-none ml-2"
+        >
+          Blog
+        </Link>
+        <Link 
+          href="/plans" 
+          className="flex items-center gap-1.5 text-gray-400 hover:text-emerald-400 transition-all font-bold focus:outline-none ml-2"
+        >
+          {lang === "fr" ? "Tarifs" : "Pricing"}
+        </Link>
+
         {/* Language Selector Desktop */}
         <div className="relative group py-2 border-l border-white/10 pl-6 ml-2">
           <button className="flex items-center gap-1.5 text-gray-400 hover:text-white transition-all font-bold focus:outline-none uppercase">
@@ -148,6 +162,37 @@ export default function HeaderNav() {
       {mounted && isMobileMenuOpen && createPortal(
         <div className="fixed inset-0 bg-[#050505]/95 backdrop-blur-xl z-[100] overflow-y-auto lg:hidden pt-24 pb-10 px-6 border-t border-white/5">
           <div className="absolute top-4 right-8 z-[110]">
+            <div className="flex gap-2 bg-white/5 p-1 rounded-xl border border-white/10">
+              <button 
+                onClick={() => toggleLanguage("fr")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${lang === "fr" ? "bg-emerald-500 text-black" : "text-gray-400 hover:text-white"}`}
+              >
+                FR
+              </button>
+              <button 
+                onClick={() => toggleLanguage("en")}
+                className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all ${lang === "en" ? "bg-emerald-500 text-black" : "text-gray-400 hover:text-white"}`}
+              >
+                EN
+              </button>
+            </div>
+          </div>
+          
+          <div className="flex flex-col gap-6">
+            <Link 
+              href="/blog" 
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="text-lg font-bold text-gray-200 hover:text-emerald-400 border-b border-white/10 pb-4"
+            >
+              Blog
+            </Link>
+            <Link 
+              href="/plans" 
+              onClick={() => setIsMobileMenuOpen(false)}
+              className="text-lg font-bold text-gray-200 hover:text-emerald-400 border-b border-white/10 pb-4"
+            >
+              {lang === "fr" ? "Tarifs" : "Pricing"}
+            </Link>
             <button 
               className="p-2 text-gray-400 hover:text-white focus:outline-none"
               onClick={() => setIsMobileMenuOpen(false)}

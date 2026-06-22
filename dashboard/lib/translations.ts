@@ -16,11 +16,18 @@ export interface TranslationItem {
     desc: string;
     items: string[];
     color: string;
+    price?: string;
+    cta?: string;
+    href?: string;
+    highlight?: boolean;
+    mediaUrl?: string;
+    mediaSize?: "small" | "medium" | "large" | "full" | string;
   }[];
   // Video Section
   videoTitle: string;
   videoDesc: string;
   videoAlt: string;
+  videoUrl?: string;
   videoConsoleTitle?: string;
   videoConsoleItems?: string[];
   // Comparison table (optional)
@@ -35,6 +42,74 @@ export interface TranslationItem {
 }
 
 export const translations: Record<string, Record<Language, TranslationItem>> = {
+  pricing: {
+    fr: {
+      metaTitle: "Tarifs — Synapse Proxy",
+      metaDesc: "Choisissez le plan adapté à votre utilisation de Synapse Proxy.",
+      heroBadge: "Tarifs",
+      heroTitle: "Un pricing transparent, comme notre proxy.",
+      heroDesc: "Commencez gratuitement, payez uniquement quand vos agents génèrent de la valeur réelle.",
+      backBtn: "Retour",
+      dashboardBtn: "Tableau de Bord",
+      videoTitle: "", videoDesc: "", videoAlt: "",
+      sections: [
+        {
+          title: "Developer",
+          price: "0",
+          desc: "Parfait pour expérimenter avec les agents autonomes en local.",
+          items: ["Jusqu'à 100 000 requêtes / mois", "Cache L1 (Exact Match)", "Pare-feu Agentique (Limites basiques)", "Serveur MCP inclus", "Support communautaire"],
+          color: "emerald", cta: "Commencer gratuitement", href: "/signup", highlight: false
+        },
+        {
+          title: "Startup",
+          price: "49",
+          desc: "Pour les équipes en production qui ont besoin d'observabilité.",
+          items: ["Jusqu'à 1M requêtes / mois", "Cache L2 Sémantique (ONNX)", "Pare-feu Agentique complet (Kill Switch)", "Classification d'Intents locale (0ms latency)", "Rétention des logs 30 jours", "Support prioritaire"],
+          color: "teal", cta: "Démarrer l'essai", href: "/signup", highlight: true
+        },
+        {
+          title: "Enterprise",
+          price: "Sur mesure",
+          desc: "Déploiement souverain, SLA et conformité totale.",
+          items: ["Requêtes illimitées", "Déploiement VPC / On-Premise", "Cache L3 (Compression de Contexte)", "SSO & RBAC (Multi-tenant)", "Redaction PII automatique", "Ingénieur support dédié"],
+          color: "blue", cta: "Contacter les ventes", href: "mailto:contact@synapse-proxy.com", highlight: false
+        }
+      ]
+    },
+    en: {
+      metaTitle: "Pricing — Synapse Proxy",
+      metaDesc: "Choose the right plan for your Synapse Proxy usage.",
+      heroBadge: "Pricing",
+      heroTitle: "Transparent pricing, just like our proxy.",
+      heroDesc: "Start for free, pay only when your agents generate real value.",
+      backBtn: "Back",
+      dashboardBtn: "Dashboard",
+      videoTitle: "", videoDesc: "", videoAlt: "",
+      sections: [
+        {
+          title: "Developer",
+          price: "0",
+          desc: "Perfect for experimenting with autonomous agents locally.",
+          items: ["Up to 100k requests / month", "L1 Cache (Exact Match)", "Agentic Firewall (Basic limits)", "MCP Server included", "Community support"],
+          color: "emerald", cta: "Start for free", href: "/signup", highlight: false
+        },
+        {
+          title: "Startup",
+          price: "49",
+          desc: "For production teams that need deep observability.",
+          items: ["Up to 1M requests / month", "L2 Semantic Cache (ONNX)", "Full Agentic Firewall (Kill Switch)", "Local Intent Classification (0ms latency)", "30-day log retention", "Priority support"],
+          color: "teal", cta: "Start free trial", href: "/signup", highlight: true
+        },
+        {
+          title: "Enterprise",
+          price: "Custom",
+          desc: "Sovereign deployment, SLA, and full compliance.",
+          items: ["Unlimited requests", "VPC / On-Premise deployment", "L3 Cache (Context Compression)", "SSO & RBAC (Multi-tenant)", "Automatic PII Redaction", "Dedicated support engineer"],
+          color: "blue", cta: "Contact sales", href: "mailto:contact@synapse-proxy.com", highlight: false
+        }
+      ]
+    }
+  },
   caching: {
     fr: {
       metaTitle: "Cache Sémantique LLM & Optimisation Coûts API | Synapse Proxy",

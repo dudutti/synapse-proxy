@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { createClient } from "redis";
+import { prisma } from "@/lib/prisma";
 
 // /api/admin/discovered-tools — gateway between the dashboard UI
 // and the Go proxy's /v1/keys/tools endpoint.
@@ -28,11 +29,19 @@ import { createClient } from "redis";
 // via the Go endpoint's existing session check.
 export async function GET(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session || !session.user || !session.user.email) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
   const vk = new URL(req.url).searchParams.get("vk");
   if (!vk) return NextResponse.json({ error: "missing vk" }, { status: 400 });
+
+  const user = await prisma.user.findUnique({ where: { email: session.user.email } });
+  if (!user) return new NextResponse("Unauthorized", { status: 401 });
+
+  if (user.role !== "SUPERADMIN") {
+    const apiKey = await prisma.apiKey.findFirst({ where: { virtualKey: vk, userId: user.id } });
+    if (!apiKey) return new NextResponse("Unauthorized", { status: 401 });
+  }
 
   // We read directly from Redis (same DB as the proxy) instead
   // of HTTP-proxying to the Go endpoint. The sets are flat and
@@ -53,12 +62,20 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session || !session.user || !session.user.email) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
   const url = new URL(req.url);
   const vk = url.searchParams.get("vk");
   if (!vk) return NextResponse.json({ error: "missing vk" }, { status: 400 });
+
+  const user = await prisma.user.findUnique({ where: { email: session.user.email } });
+  if (!user) return new NextResponse("Unauthorized", { status: 401 });
+
+  if (user.role !== "SUPERADMIN") {
+    const apiKey = await prisma.apiKey.findFirst({ where: { virtualKey: vk, userId: user.id } });
+    if (!apiKey) return new NextResponse("Unauthorized", { status: 401 });
+  }
 
   const body = await req.json().catch(() => ({}));
   const tool = body?.tool;
@@ -87,12 +104,20 @@ export async function POST(req: Request) {
 
 export async function DELETE(req: Request) {
   const session = await getServerSession(authOptions);
-  if (!session || (session.user as any).role !== "SUPERADMIN") {
+  if (!session || !session.user || !session.user.email) {
     return new NextResponse("Unauthorized", { status: 401 });
   }
   const url = new URL(req.url);
   const vk = url.searchParams.get("vk");
   if (!vk) return NextResponse.json({ error: "missing vk" }, { status: 400 });
+
+  const user = await prisma.user.findUnique({ where: { email: session.user.email } });
+  if (!user) return new NextResponse("Unauthorized", { status: 401 });
+
+  if (user.role !== "SUPERADMIN") {
+    const apiKey = await prisma.apiKey.findFirst({ where: { virtualKey: vk, userId: user.id } });
+    if (!apiKey) return new NextResponse("Unauthorized", { status: 401 });
+  }
 
   const body = await req.json().catch(() => ({}));
   const tool = body?.tool;

@@ -113,7 +113,7 @@ export default async function CompareLiteLlmPage() {
               </div>
             </div>
             <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-black/60 aspect-video flex items-center justify-center">
-              <DemoVideo src="/playground_cache_hits.webp" alt={t.videoAlt} />
+              <DemoVideo src={t.videoUrl || "/playground_cache_hits.webp"} alt={t.videoAlt} />
             </div>
           </div>
         </div>

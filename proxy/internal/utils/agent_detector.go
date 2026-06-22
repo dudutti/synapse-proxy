@@ -1,4 +1,4 @@
-﻿package utils
+package utils
 
 import (
 	"crypto/sha1"
@@ -77,7 +77,7 @@ func DetectAgent(in AgentDetectionInput) AgentSignature {
 	}
 	return AgentSignature{
 		ID:         "chat-direct",
-		Label:      "ðŸ’¬ Chat direct",
+		Label:      "💬 Chat direct",
 		Confidence: 0.1,
 		Source:     "fallback",
 	}

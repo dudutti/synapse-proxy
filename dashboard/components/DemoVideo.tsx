@@ -22,6 +22,20 @@ export default function DemoVideo({ src, alt, placeholderText }: DemoVideoProps)
     );
   }
 
+  if (src?.endsWith('.mp4') || src?.endsWith('.webm')) {
+    return (
+      <video
+        src={src}
+        autoPlay
+        loop
+        muted
+        playsInline
+        className="w-full h-full object-cover"
+        onError={() => setHasError(true)}
+      />
+    );
+  }
+
   return (
     <img
       src={src}

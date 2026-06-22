@@ -74,6 +74,22 @@ export default async function CostReductionPage() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-16">
           {t.sections.map((sec, idx) => (
             <div key={idx} className="bg-[#0f0f11]/60 border border-white/5 rounded-2xl p-8 backdrop-blur-xl">
+
+              {sec.mediaUrl && (
+                <div className={`mb-6 overflow-hidden flex items-center justify-center ${
+                  sec.mediaSize === 'full' ? '-mx-8 -mt-8 mb-6 rounded-none aspect-video' : 
+                  sec.mediaSize === 'large' ? 'rounded-xl aspect-video w-full' : 
+                  sec.mediaSize === 'small' ? 'rounded-xl w-16 h-16 mb-4' : 
+                  'rounded-xl aspect-video w-full max-w-[200px] mx-auto'
+                }`}>
+                  {sec.mediaUrl.endsWith('.mp4') ? (
+                    <video src={sec.mediaUrl} autoPlay loop muted playsInline className="w-full h-full object-cover" />
+                  ) : (
+                    <img src={sec.mediaUrl} alt={sec.title} className="w-full h-full object-cover" />
+                  )}
+                </div>
+              )}
+
               <h3 className="text-xl font-bold mb-4 flex items-center gap-2">
                 <Coins className="w-5 h-5 text-emerald-400" /> {sec.title}
               </h3>
@@ -114,7 +130,7 @@ export default async function CostReductionPage() {
               </div>
             </div>
             <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-black/60 aspect-video flex items-center justify-center">
-              <DemoVideo src="/stripe_billing_limits.webp" alt={t.videoAlt} />
+              <DemoVideo src={t.videoUrl || "/stripe_billing_limits.webp"} alt={t.videoAlt} />
             </div>
           </div>
         </div>

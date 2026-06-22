@@ -61,7 +61,7 @@ export async function GET(req: Request) {
 
     const keys = await prisma.apiKey.findMany({
     where: { userId: user.id },
-    select: { id: true, virtualKey: true, provider: true, monthlyBudget: true, currentUsage: true, createdAt: true, benchmarkMode: true, semanticTolerance: true, cacheTtl: true, defaultModel: true, isolateCacheByUser: true, zeroLog: true, enableL1: true, enableL2: true, enableL3: true, killSwitch: true, sessionTokenLimit: true, allowedTools: true, blockUnknownTools: true, redactPII: true, toolTtls: true }
+    select: { id: true, virtualKey: true, provider: true, monthlyBudget: true, currentUsage: true, createdAt: true, benchmarkMode: true, semanticTolerance: true, cacheTtl: true, defaultModel: true, isolateCacheByUser: true, zeroLog: true, enableL1: true, enableL2: true, enableL3: true, killSwitch: true, fingerprintLoopDetect: true, sessionTokenLimit: true, allowedTools: true, blockUnknownTools: true, redactPII: true, toolTtls: true }
   });
 
   return NextResponse.json(keys);
@@ -77,7 +77,7 @@ export async function POST(req: Request) {
     const user = await prisma.user.findUnique({ where: { email: session.user.email } });
     if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-    const { provider, realKey, fallbackProvider, fallbackKey, fallbackModel, defaultModel, isolateCacheByUser, zeroLog, enableL1, enableL2, enableL3, killSwitch, sessionTokenLimit, allowedTools, blockUnknownTools, redactPII, toolTtls } = await req.json();
+    const { provider, realKey, fallbackProvider, fallbackKey, fallbackModel, defaultModel, isolateCacheByUser, zeroLog, enableL1, enableL2, enableL3, killSwitch, fingerprintLoopDetect, sessionTokenLimit, allowedTools, blockUnknownTools, redactPII, toolTtls } = await req.json();
 
     if (!provider || !realKey) {
       return NextResponse.json({ error: "Provider and Real Key are required" }, { status: 400 });
@@ -111,6 +111,7 @@ export async function POST(req: Request) {
         enableL2: enableL2 ?? true,
         enableL3: enableL3 ?? true,
         killSwitch: !!killSwitch,
+        fingerprintLoopDetect: !!fingerprintLoopDetect,
         sessionTokenLimit: sessionTokenLimit ? parseInt(sessionTokenLimit) : null,
         allowedTools: allowedTools || null,
         blockUnknownTools: !!blockUnknownTools,
@@ -152,6 +153,7 @@ export async function POST(req: Request) {
           enable_l2: (enableL2 ?? true) ? "true" : "false",
           enable_l3: (enableL3 ?? true) ? "true" : "false",
           kill_switch: killSwitch ? "true" : "false",
+          fingerprint_loop_detect: fingerprintLoopDetect ? "true" : "false",
           session_token_limit: sessionTokenLimit ? sessionTokenLimit.toString() : "0",
           allowed_tools: allowedTools || "",
           block_unknown_tools: blockUnknownTools ? "true" : "false",

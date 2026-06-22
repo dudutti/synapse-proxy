@@ -113,7 +113,7 @@ export default async function ComparePortkeyPage() {
               </div>
             </div>
             <div className="relative rounded-2xl overflow-hidden border border-white/10 bg-black/60 aspect-video flex items-center justify-center">
-              <DemoVideo src="/multi_key_management.webp" alt={t.videoAlt} />
+              <DemoVideo src={t.videoUrl || "/multi_key_management.webp"} alt={t.videoAlt} />
             </div>
           </div>
         </div>

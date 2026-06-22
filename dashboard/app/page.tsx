@@ -7,7 +7,7 @@ import useSWR from "swr";
 import Link from "next/link";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell, ComposedChart, Area } from "recharts";
 import { motion, useMotionValue, useTransform, animate, AnimatePresence } from "framer-motion";
-import { PlayCircle, Square, LogOut, Settings, Database, Activity, Info, ChevronDown, Menu, X, Terminal, Search, ShieldAlert, History, DollarSign, BellRing } from "lucide-react";
+import { PlayCircle, Square, LogOut, Settings, Database, Activity, Info, ChevronDown, Menu, X, Terminal, Search, ShieldAlert, History, DollarSign, BellRing, Sparkles, Clock } from "lucide-react";
 import GlowingCard from "@/components/GlowingCard";
 import TokenFlowAnimation from "@/components/TokenFlowAnimation";
 import ParticleBackground from "@/components/ParticleBackground";

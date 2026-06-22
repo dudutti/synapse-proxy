@@ -104,6 +104,7 @@ export async function PUT(req: Request, { params }: { params: { id: string } }) 
       if (body.enableL2 !== undefined) redisData.enable_l2 = updatedKey.enableL2 ? "true" : "false";
       if (body.enableL3 !== undefined) redisData.enable_l3 = updatedKey.enableL3 ? "true" : "false";
       if (body.killSwitch !== undefined) redisData.kill_switch = updatedKey.killSwitch ? "true" : "false";
+      if (body.fingerprintLoopDetect !== undefined) redisData.fingerprint_loop_detect = updatedKey.fingerprintLoopDetect ? "true" : "false";
       if (body.sessionTokenLimit !== undefined) redisData.session_token_limit = updatedKey.sessionTokenLimit ? updatedKey.sessionTokenLimit.toString() : "0";
       if (body.allowedTools !== undefined) redisData.allowed_tools = updatedKey.allowedTools || "";
       if (body.blockUnknownTools !== undefined) redisData.block_unknown_tools = updatedKey.blockUnknownTools ? "true" : "false";
