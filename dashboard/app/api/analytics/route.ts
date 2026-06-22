@@ -75,7 +75,26 @@ export async function GET(req: Request) {
   // Calculate cumulative chart data
   const allLogs = await prisma.requestLog.findMany({
     where: whereClause,
-    orderBy: { createdAt: 'asc' }
+    orderBy: { createdAt: 'asc' },
+    select: {
+      provider: true,
+      model: true,
+      createdAt: true,
+      promptTokensOrig: true,
+      completionTokensOrig: true,
+      promptTokensOpt: true,
+      completionTokensOpt: true,
+      cacheLevel: true,
+      cacheCreationTokens: true,
+      cacheReadTokens: true,
+      cacheHitTokens: true,
+      cacheMissTokens: true,
+      savingsInputFresh: true,
+      savingsCacheRead: true,
+      savingsCacheCreation: true,
+      savingsOutput: true,
+      intentTag: true,
+    }
   });
 
   const chartMap = new Map();
