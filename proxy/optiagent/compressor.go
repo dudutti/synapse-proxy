@@ -1,4 +1,4 @@
-﻿package optiagent
+package optiagent
 
 import (
 	"encoding/json"
@@ -50,13 +50,51 @@ func CompressPayload(payload []byte) ([]byte, error) {
 		}
 
 		role, _ := msg["role"].(string)
-		contentStr, hasContent := msg["content"].(string)
+		// Extract content string, handling both string and array-of-blocks formats
+		var contentStr string
+		var hasContent bool
+		var isContentArray bool
+		
+		if c, ok := msg["content"].(string); ok {
+			contentStr = c
+			hasContent = true
+			isContentArray = false
+		} else if cArr, ok := msg["content"].([]interface{}); ok {
+			isContentArray = true
+			// Concatenate all text blocks to check length or regex
+			for _, blockIntf := range cArr {
+				if block, ok := blockIntf.(map[string]interface{}); ok {
+					if t, ok := block["type"].(string); ok && t == "text" {
+						if text, ok := block["text"].(string); ok {
+							contentStr += text
+							hasContent = true
+						}
+					}
+				}
+			}
+		}
+
 		name, _ := msg["name"].(string)
 		isRecentMessage := i >= msgCount-2
 
 		// 1. Hermes / Claude Chain-of-Thought Pruning
 		if role == "assistant" && !isRecentMessage && hasContent {
-			msg["content"] = thoughtRegex.ReplaceAllString(contentStr, "[Pruned Thought Process]")
+			if isContentArray {
+				cArr := msg["content"].([]interface{})
+				for j, blockIntf := range cArr {
+					if block, ok := blockIntf.(map[string]interface{}); ok {
+						if t, ok := block["type"].(string); ok && t == "text" {
+							if text, ok := block["text"].(string); ok {
+								block["text"] = thoughtRegex.ReplaceAllString(text, "[Pruned Thought Process]")
+								cArr[j] = block
+							}
+						}
+					}
+				}
+				msg["content"] = cArr
+			} else {
+				msg["content"] = thoughtRegex.ReplaceAllString(contentStr, "[Pruned Thought Process]")
+			}
 		}
 
 		// 1b. Strip reasoning_content from previous assistant turns.
@@ -84,14 +122,28 @@ func CompressPayload(payload []byte) ([]byte, error) {
 		// content and only shrink it.
 		if role == "tool" || role == "function" {
 			if !isRecentMessage && hasContent && len(contentStr) > 200 {
-				// Keep the first N chars + a trailing ellipsis. The agent
-				// can still see the head of the result; the tail is just
-				// gone (we already injected the [Synapse Proxy] compaction
-				// hint at the very first system turn, so the model knows
-				// older tool results may be truncated).
+				// Keep the first N chars + a trailing ellipsis.
 				const keep = 200
 				if len(contentStr) > keep+50 {
-					msg["content"] = contentStr[:keep] + "\n[â€¦truncated by Synapse Proxy L3â€¦]"
+					if isContentArray {
+						cArr := msg["content"].([]interface{})
+						// Just truncate the first text block and drop the rest to be safe
+						for j, blockIntf := range cArr {
+							if block, ok := blockIntf.(map[string]interface{}); ok {
+								if t, ok := block["type"].(string); ok && t == "text" {
+									if text, ok := block["text"].(string); ok && len(text) > keep {
+										block["text"] = text[:keep] + "\n[â€¦truncated by Synapse Proxy L3â€¦]"
+										cArr[j] = block
+										// Remove subsequent blocks
+										msg["content"] = cArr[:j+1]
+										break
+									}
+								}
+							}
+						}
+					} else {
+						msg["content"] = contentStr[:keep] + "\n[â€¦truncated by Synapse Proxy L3â€¦]"
+					}
 				}
 			}
 
