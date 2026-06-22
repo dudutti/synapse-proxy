@@ -649,11 +649,39 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 
 	if reqErr != nil || (resp != nil && resp.StatusCode >= 400) {
 		status := http.StatusBadGateway
+		var errBody string
 		if resp != nil {
 			status = resp.StatusCode
+			if bodyBytes, err := io.ReadAll(resp.Body); err == nil {
+				errBody = string(bodyBytes)
+				resp.Body.Close()
+			}
 		}
-		log.Printf("All upstream providers failed. Last error: %v, Status: %d", reqErr, status)
-		http.Error(w, "Failed to reach upstream provider", status)
+		
+		log.Printf("All upstream providers failed. Last error: %v, Status: %d, Body: %s", reqErr, status, errBody)
+		
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		
+		// If upstream returned a JSON error, forward it directly so clients (e.g. LiteLLM) can parse it.
+		// Otherwise, wrap the plain text error in an OpenAI-compatible error format.
+		if strings.HasPrefix(strings.TrimSpace(errBody), "{") {
+			w.Write([]byte(errBody))
+		} else {
+			errMsg := "Failed to reach upstream provider"
+			if errBody != "" {
+				errMsg = errBody
+			} else if reqErr != nil {
+				errMsg = reqErr.Error()
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"error": map[string]interface{}{
+					"message": errMsg,
+					"type":    "upstream_error",
+					"code":    status,
+				},
+			})
+		}
 		return
 	}
 
