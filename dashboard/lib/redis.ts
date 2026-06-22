@@ -10,7 +10,11 @@ let connecting: Promise<RedisClientType> | null = null;
 export async function getRedis(): Promise<RedisClientType | null> {
   if (client) return client;
   if (!connecting) {
-    const url = process.env.REDIS_URL || "redis://localhost:6379";
+    // Default to the in-network Docker DNS name for Redis. We deliberately
+    // do NOT default to localhost:6379 because in production the dashboard
+    // runs in a Docker network alongside the redis service, and
+    // localhost would resolve to the dashboard's own container.
+    const url = process.env.REDIS_URL || "redis://redis:6379";
     const c = createClient({ url });
     c.on("error", (err) => {
       console.error("[redis] client error:", err?.message || err);

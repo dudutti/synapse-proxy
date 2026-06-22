@@ -2,7 +2,11 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 
-const ALLOWED_FIELDS = new Set(["originalPayload", "optimizedPayload"]);
+const ALLOWED_FIELDS = new Set([
+  "originalPayload",
+  "optimizedPayload",
+  "responsePayload",
+]);
 
 export async function GET(
   req: Request,
@@ -51,12 +55,18 @@ export async function GET(
       });
     }
 
-    return new NextResponse(text, {
+    // Wrap the raw payload in a JSON envelope so the client can call
+    // r.json() safely. The previous version returned the raw text
+    // with Content-Type: application/json, which crashed the client
+    // whenever the payload contained unescaped characters (common
+    // with LLM responses that include control bytes, raw newlines in
+    // JSON values, etc.).
+    const body = JSON.stringify({ payload: text });
+    return new NextResponse(body, {
       status: 200,
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        "Content-Disposition": `attachment; filename="${params.id}-${field}.json"`,
-        "Content-Length": String(text.length),
+        "Content-Length": String(body.length),
       },
     });
   } catch (e: any) {
