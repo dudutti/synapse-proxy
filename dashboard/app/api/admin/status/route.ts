@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { prisma } from "@/lib/prisma";
+import { cacheJson } from "@/lib/redis";
 
 export const dynamic = 'force-dynamic';
 
@@ -14,6 +15,8 @@ export const dynamic = 'force-dynamic';
 //
 // Refreshed every 5s by the StatusPage client. Each sub-fetch has its
 // own timeout so a slow dependency doesn't block the whole page.
+// The expensive DB block (10 parallel queries) is cached in Redis
+// for 10s so the 5Hz polling of the HUD doesn't hammer Postgres.
 //
 // Requires SUPERADMIN.
 export async function GET() {
@@ -26,9 +29,10 @@ export async function GET() {
 
   // 1. Scrape Prometheus /metrics from the proxy. We parse it client-
   // side-ish by reusing the same regex-based parser the Go side uses.
+  // 2. Cache the heavy DB block in Redis for 10s.
   const [prometheusText, dbStats] = await Promise.all([
     fetchPrometheus(`${proxyUrl}/metrics`).catch((e) => ({ error: String(e), text: null })),
-    fetchDbStats(),
+    cacheJson("synapse:dash:status:db", 10, fetchDbStats),
   ]);
 
   const metrics = parsePrometheus(prometheusText.text || "");

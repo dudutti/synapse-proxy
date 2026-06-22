@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { prisma } from "@/lib/prisma";
+import { cacheJson } from "@/lib/redis";
 
 export const dynamic = "force-dynamic";
 
@@ -51,6 +52,26 @@ export async function GET(req: Request) {
   const windowHours = Math.min(720, Math.max(1, Number(url.searchParams.get("windowHours") || 24 * 30))); // default 30 days
 
   const since = new Date(Date.now() - windowHours * 3600 * 1000);
+
+  // The (provider, model, payloadHash) groupBy + 50-row sample fetch is
+  // expensive on a 30-day window. Cache the whole response for 60s —
+  // the user can wait a minute for fresh numbers on a deep analytics page.
+  const cacheKey = `synapse:dash:expensive:${user.id || "global"}:${windowHours}:${limit}`;
+  const cached = await cacheJson<any>(cacheKey, 60, async () => {
+    return await computeExpensive({ since, limit, isSuper, userKeyIds, windowHours });
+  });
+  return NextResponse.json(cached);
+}
+
+async function computeExpensive({
+  since, limit, isSuper, userKeyIds, windowHours,
+}: {
+  since: Date;
+  limit: number;
+  isSuper: boolean;
+  userKeyIds: string[];
+  windowHours: number;
+}) {
 
   // Group by payloadHash so identical prompts collapse into a single
   // row. The proxy now populates payloadHash correctly (see the
@@ -142,12 +163,12 @@ export async function GET(req: Request) {
     };
   });
 
-  return NextResponse.json({
+  return {
     rows,
     windowHours,
     totalHits: rows.reduce((acc, r) => acc + r.hits, 0),
     totalFallbackCost: rows.reduce((acc, r) => acc + r.approxFallbackCost, 0),
     totalL2Potential: rows.reduce((acc, r) => acc + r.l2Potential, 0),
     groupingMode: "payloadHash",
-  });
+  };
 }

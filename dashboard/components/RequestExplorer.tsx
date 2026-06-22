@@ -426,11 +426,13 @@ function RequestDetailDrawer({ id, onClose }: { id: string; onClose: () => void 
                 </pre>
               )}
               {(tab === "original" || tab === "optimized" || tab === "response") && (
-                <PayloadBlock
-                  text={
+                <ResponsePayloadTab
+                  rowId={row.id}
+                  tab={tab}
+                  inlinePayload={
                     tab === "original" ? row.originalPayload :
                     tab === "optimized" ? row.optimizedPayload :
-                    row.responsePayload
+                    null
                   }
                 />
               )}
@@ -440,6 +442,53 @@ function RequestDetailDrawer({ id, onClose }: { id: string; onClose: () => void 
       </motion.div>
     </motion.div>
   );
+}
+
+function ResponsePayloadTab({
+  rowId,
+  tab,
+  inlinePayload,
+}: {
+  rowId: string;
+  tab: "original" | "optimized" | "response";
+  inlinePayload: string | null | undefined;
+}) {
+  const [fetched, setFetched] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (tab !== "response") return;
+    if (inlinePayload != null) {
+      setFetched(inlinePayload);
+      return;
+    }
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    fetch(`/api/telemetry/${rowId}/payload?field=responsePayload`, { cache: "no-store" })
+      .then(async (r) => {
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const j = await r.json();
+        if (!cancelled) setFetched(j.payload ?? "");
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [tab, rowId, inlinePayload]);
+
+  if (tab === "response") {
+    if (loading) return <PayloadBlock text="(loading…)" />;
+    if (error) return <PayloadBlock text={`(error: ${error})`} />;
+    return <PayloadBlock text={fetched ?? "(empty)"} />;
+  }
+  return <PayloadBlock text={inlinePayload ?? "(empty)"} />;
 }
 
 function Pill({ k, v, highlight }: { k: string; v: string; highlight?: boolean }) {

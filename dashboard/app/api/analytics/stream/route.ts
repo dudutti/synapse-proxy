@@ -29,7 +29,11 @@ export async function GET(req: NextRequest) {
       return new Response("Invalid API Key", { status: 400 });
     }
   }
-  let lastCheckedTime = new Date();
+  // Start from "now - 30s" so the first poll returns recent activity
+  // immediately, instead of waiting up to 2s for the first new event.
+  // Bounded by the (apiKeyId, createdAt DESC) index added in
+  // migration 2026_06_22_perf_indexes.
+  let lastCheckedTime = new Date(Date.now() - 30_000);
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -84,10 +88,6 @@ export async function GET(req: NextRequest) {
               // DEBUG: log the first event so we can verify the SSE
               // payload contains convSignature in production.
               // Remove once the Live Telemetry grouping bug is fixed.
-              if (!globalThis.__sse_debug_logged) {
-                globalThis.__sse_debug_logged = true;
-                console.log('[SSE DEBUG] first payload:', JSON.stringify(payload));
-              }
               controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
             }
           }

@@ -22,15 +22,34 @@ services:
     volumes:
       - postgres_data:/var/lib/postgresql/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-synapse-proxy}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
 
   redis:
-    image: redis/redis-stack-server:latest
+    # We build a thin custom image on top of redis/redis-stack-server
+    # so that AOF persistence is ON and the bind-mounted volume is
+    # actually used. Without this, every container restart wipes all
+    # keys — which breaks the proxy entirely because the proxy reads
+    # virtual keys from Redis (not Postgres). We hit this in production
+    # on 2026-06-17. See redis-start.sh + redis-stack-override.conf.
+    build:
+      context: .
+      dockerfile: redis-stack.Dockerfile
+    image: synapse-proxy-redis:local
     container_name: synapse-proxy-redis
     ports:
       - "6379:6379"
     volumes:
       - redis_data:/data
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
 
   proxy:
     build: ./proxy
@@ -46,7 +65,10 @@ services:
       # DEFAULT_VIRTUAL_KEY=sk-opti-CHANGE-ME
       # FORCE_MODEL=minimax-m2.7
     depends_on:
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:

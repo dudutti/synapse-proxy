@@ -137,6 +137,10 @@ model RequestLog {
   @@index([agentId])
   @@index([sessionId])
   @@index([agentId, createdAt])
+  @@index([apiKeyId, createdAt])
+  @@index([createdAt])
+  @@index([cacheLevel, createdAt])
+  @@index([sessionId, createdAt])
 }
 
 model BenchmarkLog {
@@ -156,6 +160,8 @@ model BenchmarkLog {
   aiReliabilityScore Int      // 0 to 100
   aiFeedback         String
   createdAt          DateTime @default(now())
+
+  @@index([apiKeyId, createdAt])
 }
 
 model ProviderModel {

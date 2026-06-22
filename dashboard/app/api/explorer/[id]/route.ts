@@ -22,7 +22,16 @@ export async function GET(
 
   const row = await prisma.requestLog.findUnique({
     where: { id: params.id },
-    include: { apiKey: true }
+    include: {
+      apiKey: {
+        select: {
+          id: true,
+          userId: true,
+          provider: true,
+          virtualKey: true,
+        },
+      },
+    },
   });
 
   if (!row) {
@@ -33,8 +42,19 @@ export async function GET(
     return new NextResponse("Forbidden", { status: 403 });
   }
 
-  // Remove the apiKey relation from the response payload
-  const { apiKey, ...rowSafe } = row as any;
+  // Don't ship apiKey relation fields beyond what's safe to expose
+  // (realKeyEnc / fallbackKeyEnc are credentials — only the dedicated
+  // payload route can surface those, and even then with auth checks).
+  // responsePayload is the heaviest column (multi-MB SSE buffers); the
+  // explorer page lazy-fetches it via /api/telemetry/[id]/payload.
+  const {
+    apiKey,
+    responsePayload: _omitResponse,
+    ...rowSafe
+  } = row as any;
 
-  return NextResponse.json({ row: rowSafe });
+  return NextResponse.json({
+    row: rowSafe,
+    hasResponsePayload: Boolean(_omitResponse),
+  });
 }

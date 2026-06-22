@@ -16,74 +16,94 @@ export async function GET(req: NextRequest) {
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
-    // 2. Fetch all users who have an active account (e.g. at least one API key)
+    // 2. Fetch all users who have an active account.
     const users = await prisma.user.findMany({
-      select: {
-        id: true,
-        name: true,
-        email: true,
-      }
+      select: { id: true, name: true, email: true },
     });
 
     let emailsSent = 0;
 
     for (const user of users) {
-      // 3. Aggregate RequestLogs for this user over the last 7 days
-      // First, get all keys for this user
+      // 3. Aggregate RequestLogs for this user over the last 7 days.
+      //    NOTE: there is no tokensIn / tokensOut column on RequestLog —
+      //    the real columns are promptTokensOrig / completionTokensOrig
+      //    (and their promptTokensOpt / completionTokensOpt siblings).
+      //    We sum everything in one SQL pass instead of loading each row
+      //    into JS — this avoids the O(N × user) N+1 from the previous
+      //    implementation that did `findMany + JS loop`.
       const userKeys = await prisma.apiKey.findMany({
         where: { userId: user.id },
-        select: { id: true }
+        select: { id: true },
       });
-      const keyIds = userKeys.map(k => k.id);
+      const keyIds = userKeys.map((k) => k.id);
 
       if (keyIds.length === 0) continue;
 
-      const logs = await prisma.requestLog.findMany({
-        where: {
-          apiKeyId: { in: keyIds },
-          createdAt: { gte: sevenDaysAgo }
-        },
-        select: {
-          tokensIn: true,
-          tokensOut: true,
-          cacheLevel: true,
-          // Calculate standard cost vs actual cost if you stored pricing
-          // but for simplicity, we can do rough estimates based on tokens
+      const [totals, byLevel] = await Promise.all([
+        prisma.requestLog.aggregate({
+          where: {
+            apiKeyId: { in: keyIds },
+            createdAt: { gte: sevenDaysAgo },
+          },
+          _sum: {
+            promptTokensOrig: true,
+            completionTokensOrig: true,
+            promptTokensOpt: true,
+            completionTokensOpt: true,
+            costSaved: true,
+          },
+          _count: { _all: true },
+        }),
+        prisma.requestLog.groupBy({
+          by: ["cacheLevel"],
+          where: {
+            apiKeyId: { in: keyIds },
+            createdAt: { gte: sevenDaysAgo },
+          },
+          _count: { _all: true },
+        }),
+      ]);
+
+      const totalRequests = totals._count._all;
+      if (totalRequests === 0) continue;
+
+      const sum = totals._sum;
+      const promptOrig = sum.promptTokensOrig ?? 0;
+      const completionOrig = sum.completionTokensOrig ?? 0;
+      const promptOpt = sum.promptTokensOpt ?? 0;
+      const completionOpt = sum.completionTokensOpt ?? 0;
+      const totalOrig = promptOrig + completionOrig;
+      const totalOpt = promptOpt + completionOpt;
+      const totalTokensSaved = Math.max(0, totalOrig - totalOpt);
+
+      let l1l2Hits = 0;
+      let l3Hits = 0;
+      for (const row of byLevel) {
+        if (row.cacheLevel === "L1" || row.cacheLevel === "L2") {
+          l1l2Hits += row._count._all;
+        } else if (row.cacheLevel === "L3") {
+          l3Hits += row._count._all;
         }
-      });
+      }
+      const hitRate = Math.round((l1l2Hits / totalRequests) * 100);
 
-      if (logs.length === 0) continue; // No activity this week
+      // Use the real costSaved column instead of a $10/1M token estimate.
+      // costSaved is already a dollar amount (Float) computed at telemetry
+      // ingest time using ProviderModel pricing.
+      const dollarsSaved = (sum.costSaved ?? 0).toFixed(2);
 
-      let totalTokensSaved = 0;
-      let totalL1L2Hits = 0;
-      
-      logs.forEach(log => {
-        if (log.cacheLevel === "L1" || log.cacheLevel === "L2") {
-          totalL1L2Hits++;
-          // For a cache hit, we save 100% of the tokens (in + out)
-          totalTokensSaved += (log.tokensIn || 0) + (log.tokensOut || 0);
-        } else if (log.cacheLevel === "L3") {
-          // L3 compression saves a percentage
-          totalTokensSaved += Math.floor((log.tokensIn || 0) * 0.2); // rough estimate of 20%
-        }
-      });
-
-      const hitRate = Math.round((totalL1L2Hits / logs.length) * 100);
-
-      // Estimate dollars saved (assume $10/1M tokens average)
-      const dollarsSaved = ((totalTokensSaved / 1_000_000) * 10).toFixed(2);
-
-      // Send the Weekly Report email
       await sendEmail({
         to: user.email,
         templateId: "weekly_report",
         variables: {
           NAME: user.name || "Utilisateur",
           TOKENS_SAVED: totalTokensSaved.toLocaleString(),
-          DOLLARS_SAVED: dollarsSaved.toString(),
+          DOLLARS_SAVED: dollarsSaved,
           CACHE_HIT_RATE: hitRate.toString(),
-          DASHBOARD_URL: "https://synapse-proxy.com"
-        }
+          L3_HITS: l3Hits.toLocaleString(),
+          TOTAL_REQUESTS: totalRequests.toLocaleString(),
+          DASHBOARD_URL: "https://synapse-proxy.com",
+        },
       });
       emailsSent++;
     }

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
+import { cacheJson } from "@/lib/redis";
 
 const GLOBAL_CITIES = [
   { lat: 40.7128, lng: -74.0060 }, // New York
@@ -41,83 +42,91 @@ export async function GET(req: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 403 });
   }
 
-  // 1. Fetch Aggregated Global Stats
-  const cacheStats = await prisma.requestLog.groupBy({
-    by: ['cacheLevel'],
-    _count: {
-      _all: true,
-    },
-  });
+  // The telemetry payload is a full-table groupBy + aggregate + 50-row
+  // ORDER BY createdAt DESC every time the home page polls it. Cache
+  // the whole computed payload for 30s — the home page is fine with
+  // 30s freshness on the cumulative counters.
+  const payload = await cacheJson("synapse:dash:telemetry:v1", 30, async () => {
+    // 1. Fetch Aggregated Global Stats
+    const cacheStats = await prisma.requestLog.groupBy({
+      by: ['cacheLevel'],
+      _count: {
+        _all: true,
+      },
+    });
 
-  const totals = await prisma.requestLog.aggregate({
-    _sum: {
-      promptTokensOrig: true,
-      completionTokensOrig: true,
-      promptTokensOpt: true,
-      completionTokensOpt: true,
-      costSaved: true,
-    },
-    _count: {
-      id: true,
-    }
-  });
+    const totals = await prisma.requestLog.aggregate({
+      _sum: {
+        promptTokensOrig: true,
+        completionTokensOrig: true,
+        promptTokensOpt: true,
+        completionTokensOpt: true,
+        costSaved: true,
+      },
+      _count: {
+        id: true,
+      }
+    });
 
-  const distribution = { MISS: 0, L0: 0, L1: 0, L2: 0, L3: 0 };
-  cacheStats.forEach(stat => {
-    if (stat.cacheLevel === "NONE") distribution.MISS = stat._count._all;
-    else if (stat.cacheLevel === "L0") distribution.L0 = stat._count._all;
-    else if (stat.cacheLevel === "L1") distribution.L1 = stat._count._all;
-    else if (stat.cacheLevel === "L2") distribution.L2 = stat._count._all;
-    else if (stat.cacheLevel === "L3") distribution.L3 = stat._count._all;
-  });
+    const distribution = { MISS: 0, L0: 0, L1: 0, L2: 0, L3: 0 };
+    cacheStats.forEach(stat => {
+      if (stat.cacheLevel === "NONE") distribution.MISS = stat._count._all;
+      else if (stat.cacheLevel === "L0") distribution.L0 = stat._count._all;
+      else if (stat.cacheLevel === "L1") distribution.L1 = stat._count._all;
+      else if (stat.cacheLevel === "L2") distribution.L2 = stat._count._all;
+      else if (stat.cacheLevel === "L3") distribution.L3 = stat._count._all;
+    });
 
-  const sum = totals._sum;
-  const originalInput = sum.promptTokensOrig || 0;
-  const originalOutput = sum.completionTokensOrig || 0;
-  const optimizedInput = sum.promptTokensOpt || 0;
-  const optimizedOutput = sum.completionTokensOpt || 0;
+    const sum = totals._sum;
+    const originalInput = sum.promptTokensOrig || 0;
+    const originalOutput = sum.completionTokensOrig || 0;
+    const optimizedInput = sum.promptTokensOpt || 0;
+    const optimizedOutput = sum.completionTokensOpt || 0;
 
-  const totalTokensPassed = originalInput + originalOutput;
-  const totalTokensSaved = totalTokensPassed - (optimizedInput + optimizedOutput);
-  
-  const stats = {
-    totalRequests: totals._count.id || 0,
-    totalTokensPassed,
-    totalTokensSaved,
-    totalCostSaved: sum.costSaved || 0,
-    distribution
-  };
+    const totalTokensPassed = originalInput + originalOutput;
+    const totalTokensSaved = totalTokensPassed - (optimizedInput + optimizedOutput);
 
-  // 2. Fetch Recent Logs for Globe Markers
-  const recentLogs = await prisma.requestLog.findMany({
-    orderBy: { createdAt: 'desc' },
-    take: 50,
-    select: {
-      id: true,
-      cacheLevel: true,
-      createdAt: true
-    }
-  });
-
-  const markers = recentLogs.map(log => {
-    const city = getRandomCity(log.id);
-    let size = 0.05;
-    let color = [1, 0, 0]; // Red for MISS by default
-
-    if (log.cacheLevel === "L1" || log.cacheLevel === "L2") {
-      color = [0.2, 1, 0.2]; // Bright Green for Cache Hit
-      size = 0.08;
-    } else if (log.cacheLevel === "L3") {
-      color = [0.7, 0.2, 1]; // Purple for Compression
-      size = 0.06;
-    }
-
-    return {
-      location: [city.lat, city.lng],
-      size,
-      color
+    const stats = {
+      totalRequests: totals._count.id || 0,
+      totalTokensPassed,
+      totalTokensSaved,
+      totalCostSaved: sum.costSaved || 0,
+      distribution
     };
+
+    // 2. Fetch Recent Logs for Globe Markers
+    const recentLogs = await prisma.requestLog.findMany({
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      select: {
+        id: true,
+        cacheLevel: true,
+        createdAt: true
+      }
+    });
+
+    const markers = recentLogs.map(log => {
+      const city = getRandomCity(log.id);
+      let size = 0.05;
+      let color = [1, 0, 0]; // Red for MISS by default
+
+      if (log.cacheLevel === "L1" || log.cacheLevel === "L2") {
+        color = [0.2, 1, 0.2]; // Bright Green for Cache Hit
+        size = 0.08;
+      } else if (log.cacheLevel === "L3") {
+        color = [0.7, 0.2, 1]; // Purple for Compression
+        size = 0.06;
+      }
+
+      return {
+        location: [city.lat, city.lng],
+        size,
+        color
+      };
+    });
+
+    return { stats, markers };
   });
 
-  return NextResponse.json({ stats, markers });
+  return NextResponse.json(payload);
 }
