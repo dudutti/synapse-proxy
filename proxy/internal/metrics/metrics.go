@@ -21,6 +21,8 @@ import (
 	"sort"
 	"sync"
 	"sync/atomic"
+
+	"synapse-proxy/internal/metrics/persistent"
 )
 
 // --- Panic counters ---------------------------------------------------
@@ -47,6 +49,7 @@ func RecordPanic(handler string) {
 		panicCountsMu.Unlock()
 	}
 	atomic.AddUint64(c, 1)
+	persistent.Submit("panics_total{"+handler+"}", 1)
 }
 
 // PanicCount returns the panic count for a handler.
@@ -113,6 +116,16 @@ func RecordCacheHit(level string, tokensSaved uint64, costSavedDollars float64) 
 			cacheSavedCostCents[level] = &mc
 		}
 	}
+
+	// Mirror to Redis (fire-and-forget). Submit is non-blocking and
+	// channel-buffered, so holding the mutex is fine.
+	persistent.Submit("cache_hits_total{"+level+"}", 1)
+	if tokensSaved > 0 {
+		persistent.Submit("tokens_saved_total{"+level+"}", float64(tokensSaved))
+	}
+	if costSavedDollars > 0 {
+		persistent.Submit("cost_saved_millicents_total{"+level+"}", costSavedDollars*1000)
+	}
 }
 
 // CacheHits returns a copy of the per-level hit counts.
@@ -166,8 +179,10 @@ func RecordUpstream(latencyMs int, isError bool) {
 	upstreamMu.Lock()
 	defer upstreamMu.Unlock()
 	atomic.AddUint64(&upstreamReqs, 1)
+	persistent.Submit("upstream_requests_total", 1)
 	if isError {
 		atomic.AddUint64(&upstreamErrors, 1)
+		persistent.Submit("upstream_errors_total", 1)
 		return
 	}
 	var idx int
@@ -203,32 +218,58 @@ func upstreamSnapshot() (buckets []uint64, errors uint64, total uint64) {
 // WritePrometheus writes the metrics in Prometheus text exposition
 // format (https://prometheus.io/docs/instrumenting/exposition_formats/).
 // Always returns a 200 with Content-Type "text/plain; version=0.0.4".
+//
+// Each counter is reported as (in-memory counter for the current
+// process) + (persisted cumulative counter from Redis) so the
+// SUPERADMIN HUD sees non-zero totals across proxy restarts. The two
+// are summed at scrape time, with the cumulative value read from
+// persistent.Cumulative() (a hydrated copy of the Redis HASH).
 func WritePrometheus(w io.Writer) {
+	cum := persistent.Cumulative()
+
+	// Each block: HELP, TYPE, then samples = in-memory + cum[label-key].
+
+	// cache_hits_total (prometheus convention: samples after TYPE).
+	hits := CacheHits()
 	fmt.Fprintln(w, "# HELP synapse_proxy_cache_hits_total Cache hits since process start, by level")
 	fmt.Fprintln(w, "# TYPE synapse_proxy_cache_hits_total counter")
-	for _, level := range sortedKeys(CacheHits()) {
-		fmt.Fprintf(w, "synapse_proxy_cache_hits_total{cache_level=%q} %d\n", level, CacheHits()[level])
+	for _, level := range sortedKeys(hits) {
+		cumKey := "cache_hits_total{" + level + "}"
+		total := uint64(hits[level]) + uint64(cum[cumKey])
+		fmt.Fprintf(w, "synapse_proxy_cache_hits_total{cache_level=%q} %d\n", level, total)
 	}
 
+	tokens := cacheSavedTokensSnapshot()
 	fmt.Fprintln(w, "# HELP synapse_proxy_tokens_saved_total Tokens saved from cache, by level")
 	fmt.Fprintln(w, "# TYPE synapse_proxy_tokens_saved_total counter")
-	for _, level := range sortedKeys(cacheSavedTokensSnapshot()) {
-		fmt.Fprintf(w, "synapse_proxy_tokens_saved_total{cache_level=%q} %d\n", level, cacheSavedTokensSnapshot()[level])
+	for _, level := range sortedKeys(tokens) {
+		cumKey := "tokens_saved_total{" + level + "}"
+		total := tokens[level] + uint64(cum[cumKey])
+		fmt.Fprintf(w, "synapse_proxy_tokens_saved_total{cache_level=%q} %d\n", level, total)
 	}
 
+	costs := cacheSavedCostCentsSnapshot()
 	fmt.Fprintln(w, "# HELP synapse_proxy_cost_saved_total Cost saved in millicents (1/1000 USD), by level")
 	fmt.Fprintln(w, "# TYPE synapse_proxy_cost_saved_total counter")
-	for _, level := range sortedKeys(cacheSavedCostCentsSnapshot()) {
-		fmt.Fprintf(w, "synapse_proxy_cost_saved_total{cache_level=%q} %d\n", level, cacheSavedCostCentsSnapshot()[level])
+	for _, level := range sortedKeys(costs) {
+		cumKey := "cost_saved_millicents_total{" + level + "}"
+		total := costs[level] + uint64(cum[cumKey])
+		fmt.Fprintf(w, "synapse_proxy_cost_saved_total{cache_level=%q} %d\n", level, total)
 	}
 
+	panics := panicSnapshot()
 	fmt.Fprintln(w, "# HELP synapse_proxy_panics_total Panics recovered, by handler")
 	fmt.Fprintln(w, "# TYPE synapse_proxy_panics_total counter")
-	for _, handler := range sortedKeys(panicSnapshot()) {
-		fmt.Fprintf(w, "synapse_proxy_panics_total{handler=%q} %d\n", handler, panicSnapshot()[handler])
+	for _, handler := range sortedKeys(panics) {
+		cumKey := "panics_total{" + handler + "}"
+		total := panics[handler] + uint64(cum[cumKey])
+		fmt.Fprintf(w, "synapse_proxy_panics_total{handler=%q} %d\n", handler, total)
 	}
 
 	buckets, errors, total := upstreamSnapshot()
+	upReqsTotal := total + uint64(cum["upstream_requests_total"])
+	upErrsTotal := errors + uint64(cum["upstream_errors_total"])
+
 	labels := []string{"le_10ms", "le_100ms", "le_500ms", "le_2s", "ge_2s"}
 	fmt.Fprintln(w, "# HELP synapse_proxy_upstream_latency_seconds Upstream latency in coarse buckets")
 	fmt.Fprintln(w, "# TYPE synapse_proxy_upstream_latency_seconds counter")
@@ -240,11 +281,11 @@ func WritePrometheus(w io.Writer) {
 
 	fmt.Fprintln(w, "# HELP synapse_proxy_upstream_requests_total Total upstream requests")
 	fmt.Fprintln(w, "# TYPE synapse_proxy_upstream_requests_total counter")
-	fmt.Fprintf(w, "synapse_proxy_upstream_requests_total %d\n", total)
+	fmt.Fprintf(w, "synapse_proxy_upstream_requests_total %d\n", upReqsTotal)
 
 	fmt.Fprintln(w, "# HELP synapse_proxy_upstream_errors_total Upstream requests with status >= 400")
 	fmt.Fprintln(w, "# TYPE synapse_proxy_upstream_errors_total counter")
-	fmt.Fprintf(w, "synapse_proxy_upstream_errors_total %d\n", errors)
+	fmt.Fprintf(w, "synapse_proxy_upstream_errors_total %d\n", upErrsTotal)
 }
 
 // Handler returns an http.HandlerFunc that writes the Prometheus text

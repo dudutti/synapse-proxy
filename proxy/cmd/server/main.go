@@ -16,6 +16,7 @@ import (
 	"synapse-proxy/internal/handlers"
 	"synapse-proxy/internal/mcp"
 	"synapse-proxy/internal/metrics"
+	"synapse-proxy/internal/metrics/persistent"
 	"synapse-proxy/internal/utils"
 	"synapse-proxy/internal/workers"
 )
@@ -72,6 +73,11 @@ func main() {
 	// 2. Initialize Database Connections
 	db.InitRedis()
 	db.InitPostgres()
+
+	// 2b. Boot the persistent metrics mirror. Hydrates the cumulative
+	// counter map from Redis so /metrics shows non-zero totals across
+	// restarts; the background flusher ships new deltas every 2s.
+	persistent.Init()
 
 	// 3. Run idempotent schema migrations (called once, not from worker loops)
 	workers.RunTelemetryMigrations()
