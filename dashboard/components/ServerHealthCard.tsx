@@ -238,7 +238,7 @@ export type StatusData = {
   };
 };
 
-const REFRESH_MS = 5000;
+const REFRESH_MS = 15000;
 
 export function ServerHealthCard() {
   const [data, setData] = useState<StatusData | null>(null);

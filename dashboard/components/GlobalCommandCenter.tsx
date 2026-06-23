@@ -103,7 +103,7 @@ export function GlobalCommandCenter() {
     };
     
     fetchTelemetry();
-    const interval = setInterval(fetchTelemetry, 5000);
+    const interval = setInterval(fetchTelemetry, 15000);
     return () => clearInterval(interval);
   }, []);
 

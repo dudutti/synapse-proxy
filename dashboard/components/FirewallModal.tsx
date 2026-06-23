@@ -164,7 +164,7 @@ export default function FirewallModal({ apiKey, onClose, onSave }: FirewallModal
   // close/reopen the modal.
   useEffect(() => {
     refreshTools();
-    const interval = setInterval(refreshTools, 5000);
+    const interval = setInterval(refreshTools, 15000);
     return () => clearInterval(interval);
   }, [apiKey.virtualKey]);
 
