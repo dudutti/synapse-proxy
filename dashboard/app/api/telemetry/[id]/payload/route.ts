@@ -61,12 +61,21 @@ export async function GET(
     // whenever the payload contained unescaped characters (common
     // with LLM responses that include control bytes, raw newlines in
     // JSON values, etc.).
+    //
+    // IMPORTANT: do NOT set Content-Length manually. JavaScript's
+    // String.prototype.length counts UTF-16 code units, not bytes, so
+    // for payloads with non-ASCII characters (french, emojis, etc.)
+    // the declared length is smaller than the actual UTF-8 byte
+    // length. The browser / proxy reads Content-Length and truncates
+    // the body to that smaller size, leaving a half-formed JSON
+    // string at the end. r.json() then throws "Unterminated string
+    // in JSON at position N". Next.js / the runtime computes the
+    // correct byte length automatically when we omit the header.
     const body = JSON.stringify({ payload: text });
     return new NextResponse(body, {
       status: 200,
       headers: {
         "Content-Type": "application/json; charset=utf-8",
-        "Content-Length": String(body.length),
       },
     });
   } catch (e: any) {
