@@ -224,7 +224,19 @@ function parsePrometheus(text: string): Record<string, ParsedMetric> {
       const brace = nameAndLabels.indexOf("{");
       const metricName = brace === -1 ? nameAndLabels : nameAndLabels.slice(0, brace);
       const labelStr = brace === -1 ? "" : nameAndLabels.slice(brace + 1, nameAndLabels.length);
-      const labelKey = labelStr || "_total";
+      
+      let labelKey = "_total";
+      if (labelStr) {
+        const labels = parseLabels(labelStr);
+        const primaryKey = ["cache_level", "handler", "le", "kind"].find(k => k in labels);
+        if (primaryKey) {
+          labelKey = labels[primaryKey];
+        } else {
+          const values = Object.values(labels);
+          labelKey = values.length > 0 ? values[0] : labelStr;
+        }
+      }
+
       if (!out[metricName]) {
         out[metricName] = { type: currentType, help: "", samples: {} };
       }
@@ -232,4 +244,25 @@ function parsePrometheus(text: string): Record<string, ParsedMetric> {
     }
   }
   return out;
+}
+
+function parseLabels(labelStr: string): Record<string, string> {
+  const labels: Record<string, string> = {};
+  if (!labelStr) return labels;
+  let clean = labelStr.trim();
+  if (clean.endsWith("}")) {
+    clean = clean.slice(0, -1);
+  }
+  const pairs = clean.split(",");
+  for (const pair of pairs) {
+    const eqIdx = pair.indexOf("=");
+    if (eqIdx === -1) continue;
+    const name = pair.slice(0, eqIdx).trim();
+    let val = pair.slice(eqIdx + 1).trim();
+    if (val.startsWith('"') && val.endsWith('"')) {
+      val = val.slice(1, -1);
+    }
+    labels[name] = val;
+  }
+  return labels;
 }

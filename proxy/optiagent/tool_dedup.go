@@ -77,7 +77,7 @@ func extractOpenAIToolCalls(payload []byte) []ToolCall {
 
 var openAIToolCallRe = regexp.MustCompile(`"name"\s*:\s*"([^"]+)"\s*,\s*"arguments"\s*:\s*"((?:[^"\\]|\\.)*)"`)
 
-var argsPathRe = regexp.MustCompile(`"(?:path|file|file_path|filepath|filename|uri)"\s*:\s*"([^"]+)"`)
+var argsPathRe = regexp.MustCompile(`\\?"(?:path|file|file_path|filepath|filename|uri)\\?"\s*:\s*\\?"([^"\\]+)\\?"`)
 
 func extractPathFromArgs(argsBlob string) string {
 	if m := argsPathRe.FindStringSubmatch(argsBlob); len(m) > 1 {
@@ -380,8 +380,8 @@ func QueryToolCallCache(ctx context.Context, rdb *redis.Client, virtualKey strin
 	}
 	vectorBytes := buf.Bytes()
 
-	escapedVK := escapeRedisTag(virtualKey)
-	escapedTool := escapeRedisTag(toolName)
+	escapedVK := EscapeRedisTag(virtualKey)
+	escapedTool := EscapeRedisTag(toolName)
 	query := "(@vk:{" + escapedVK + "} @tool:{" + escapedTool + "})=>[KNN 1 @vector $query_vec AS score]"
 	
 	res, err := rdb.Do(ctx, "FT.SEARCH", "idx:toolcache", query, "PARAMS", "2", "query_vec", vectorBytes, "RETURN", "2", "score", "response", "DIALECT", "2").Result()

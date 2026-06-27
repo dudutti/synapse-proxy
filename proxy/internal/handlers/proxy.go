@@ -1,12 +1,9 @@
 package handlers
 
 import (
-	"bufio"
 	"bytes"
-	"context"
 	"encoding/binary"
 	"encoding/json"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -16,14 +13,15 @@ import (
 	"strings"
 	"time"
 
+	"synapse-proxy/cache"
 	"synapse-proxy/internal/db"
 	"synapse-proxy/internal/metrics"
 	"synapse-proxy/internal/services"
 	"synapse-proxy/internal/utils"
 	"synapse-proxy/internal/workers"
 	"synapse-proxy/optiagent"
-	"github.com/redis/go-redis/v9"
 )
+
 
 // ProxyHandler is the main HTTP handler intercepting LLM requests
 func ProxyHandler(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +103,13 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 		if s, ok := payloadMap["stream"].(bool); ok {
 			wantStream = s
 		}
+		if isolateCache {
+			if userStr, ok := payloadMap["user"].(string); ok && userStr != "" {
+				virtualKey = virtualKey + ":" + userStr
+			}
+		}
 	}
+
 
 	// Detect originating agent (Hermes, OpenClaw, ...) and session id
 	// from request headers + body. The proxy does not require any client
@@ -144,6 +148,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[ProxyHandler] agent=%s (%s, conf=%.2f) session=%q turn=%d sig=%s",
 		agentSig.ID, agentSig.Source, agentSig.Confidence, sessionID, turnCount, convSignature)
+	// debug removed
 
 	isBypassStr := r.Header.Get("X-Bypass-Cache")
 	isBypass := isBypassStr == "true"
@@ -186,6 +191,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// already been mutated by us).
 	if !wantStream {
 		hinted := optiagent.InjectCompactionHint(bodyBytes)
+
 		if len(hinted) > 0 && string(hinted) != string(bodyBytes) {
 			bodyBytes = hinted
 			// re-parse so subsequent code sees the new model field if any
@@ -241,43 +247,63 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 	// also keep the original AllowList behaviour for backwards
 	// compatibility — if `AllowedTools` is set, we still apply the
 	// strict whitelist (the user opted into strict mode).
-	if rdb != nil && virtualKey != "" && len(allToolCalls) > 0 && !keyConfig.BlockUnknownTools {
-		denyKey := "synapse:denied_tools:" + virtualKey
-		denied, _ := rdb.SMembers(ctx, denyKey).Result()
-		if len(denied) > 0 {
-			denyMap := make(map[string]bool, len(denied))
-			for _, d := range denied {
-				denyMap[d] = true
+	//
+	// This block was migrated to optiagent.ToolFilterHook (which
+	// runs the denylist + allowlist in one go and surfaces a
+	// short-circuit on either path). The hook also handles the
+	// tool dedup observation. We still keep the inline
+	// fileToolCalls extract here because the legacy cache engine
+	// reads it downstream.
+	hctx := &optiagent.HookContext{
+		VK:               virtualKey,
+		Provider:         provider,
+		Model:            reqModel,
+		SessionID:        sessionID,
+		TurnCount:        turnCount,
+		ConvSignature:    convSignature,
+		RawPayload:       bodyBytes,
+		OptimizedPayload: bodyBytes, // L3 hasn't run yet; same as raw
+		ResponseHeaders:  w.Header(),
+		Features: map[string]interface{}{
+			"kill_switch":             keyConfig.KillSwitch,
+			"fingerprint_loop_detect": keyConfig.FingerprintLoopDetect,
+			"session_token_limit":     keyConfig.SessionTokenLimit,
+			"block_unknown_tools":     keyConfig.BlockUnknownTools,
+			"allowed_tools":           keyConfig.AllowedTools,
+		},
+	}
+	optiagent.SetFingerprintEnabled(virtualKey, keyConfig.FingerprintLoopDetect)
+	if _, shortCircuited := optiagent.RunBeforeHooks(ctx, hctx); shortCircuited {
+		if hctx.ShortCircuitStatus != 0 && len(hctx.ShortCircuitBody) > 0 {
+			w.Header().Set("Content-Type", "application/json")
+			if _, isCCR := hctx.Feature("ccr_cache_hit"); isCCR {
+				w.Header().Set("X-SynapseProxy-Cache", "L3")
+				cachedUsage := utils.ExtractUsage(hctx.ShortCircuitBody)
+				promptOrig := utils.CountTokens(string(bodyBytes))
+				promptOpt := utils.CountTokens(string(hctx.OptimizedPayload))
+				go workers.PushTelemetry(virtualKey, provider, reqModel,
+					promptOrig, cachedUsage.CompletionTokens, promptOpt, 0, cachedUsage.ReasoningTokens,
+					"L3", time.Since(startTime), string(bodyBytes), string(hctx.OptimizedPayload), string(hctx.ShortCircuitBody),
+					cachedUsage.CacheCreationTokens, cachedUsage.CacheReadTokens, cachedUsage.CacheHitTokens, cachedUsage.CacheMissTokens,
+					"", "", sessionID, zeroLog, toolCallsStr, keyConfig.LimitExceeded, false,
+					turnCount, convSignature, workers.BuildPerHookSavingsJSON(hctx))
 			}
-			for _, tc := range allToolCalls {
-				if denyMap[tc.ToolName] {
-					w.Header().Set("Content-Type", "application/json")
-					w.WriteHeader(http.StatusForbidden)
-					w.Write([]byte(`{"error": {"message": "Agent Firewall denied tool call: ` + tc.ToolName + `"}}`))
-					return
-				}
-			}
+			w.WriteHeader(hctx.ShortCircuitStatus)
+			w.Write(hctx.ShortCircuitBody)
+			return
 		}
+		log.Printf("[ProxyHandler] hook pipeline short-circuit (status=%d, body=%d bytes)",
+			hctx.ShortCircuitStatus, len(hctx.ShortCircuitBody))
+	}
+	// Apply any payload mutation the hooks made (currently none of
+	// the migrated hooks mutate the request body, but keeping the
+	// mechanism here means future hooks can do so without further
+	// wiring).
+	if hctx.FinalOptimizedPayload != nil && len(hctx.FinalOptimizedPayload) > 0 {
+		bodyBytes = hctx.FinalOptimizedPayload
 	}
 
-// Agent Firewall - Tool Filtering
-	if keyConfig.BlockUnknownTools && keyConfig.AllowedTools != "" && len(allToolCalls) > 0 {
-		allowed := strings.Split(keyConfig.AllowedTools, ",")
-		allowedMap := make(map[string]bool)
-		for _, a := range allowed {
-			allowedMap[strings.TrimSpace(a)] = true
-		}
-		for _, tc := range allToolCalls {
-			if !allowedMap[tc.ToolName] {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				w.Write([]byte(`{"error": {"message": "Agent Firewall blocked unauthorized tool call: ` + tc.ToolName + `"}}`))
-				return
-			}
-		}
-	}
 
-	// Agent Firewall - Tool-call fingerprint (observer only).
 	// See docs/agent_firewall.md for the strategy.
 	if keyConfig.FingerprintLoopDetect {
 		fp := optiagent.CheckToolFingerprint(ctx, rdb, virtualKey, bodyBytes)
@@ -292,7 +318,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 				"NONE", time.Since(startTime), string(bodyBytes), string(optResult.Payload), `{"event":"fingerprint_observed","tool":"`+fp.ToolName+`","count":`+strconv.Itoa(fp.LoopCount)+`}`,
 				0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog,
 				toolCallsStr, keyConfig.LimitExceeded, false,
-				turnCount, convSignature)
+				turnCount, convSignature, workers.BuildPerHookSavingsJSON(hctx))
 		}
 	}
 
@@ -355,7 +381,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 				// cacheLevel=L0 so it's counted separately from L1/L2/L3.
 				// TokensOrig=TokensOpt=0 because the follower did no work.
 go workers.PushTelemetry(virtualKey, provider, reqModel, 0, 0, 0, 0, 0,
-			"L0", time.Since(startTime), string(bodyBytes), string(bodyBytes), string(resp), 0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog, toolCallsStr, keyConfig.LimitExceeded, false, turnCount, convSignature)
+			"L0", time.Since(startTime), string(bodyBytes), string(bodyBytes), string(resp), 0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog, toolCallsStr, keyConfig.LimitExceeded, false, turnCount, convSignature, workers.BuildPerHookSavingsJSON(hctx))
 				w.Header().Set("Content-Type", "application/json")
 				w.Header().Set("X-SynapseProxy-Cache", "L0-coalesced")
 				w.Write(resp)
@@ -377,11 +403,77 @@ go workers.PushTelemetry(virtualKey, provider, reqModel, 0, 0, 0, 0, 0,
 	}
 
 	if !isBypass {
-		optResult, err = optiagent.ProcessRequest(ctx, rdb, bodyBytes, semanticTolerance, virtualKey, isolateCache, forceDisableL2, keyConfig.EnableL1, keyConfig.EnableL2, keyConfig.EnableL3, keyConfig.LimitExceeded, cacheTtl, keyConfig.ToolTtls)
-		if err != nil {
-			http.Error(w, "Optimization engine failure", http.StatusInternalServerError)
-			return
+
+		// BUG FIX: was `var optResult` which created a NEW local variable
+		// that shadowed the function-level optResult (line 153). The closure
+		// in executeRequest captured the outer (empty) variable, causing
+		// upstream payload len=0. Now assigns to the existing function-level var.
+		optResult = optiagent.OptimizationResult{
+			Payload:          bodyBytes,
+			PayloadHash:      optiagent.HashPayload(bodyBytes),
+			PromptTokensOrig: utils.CountTokens(string(bodyBytes)),
+			PromptTokensOpt:  utils.CountTokens(string(bodyBytes)),
 		}
+		log.Printf("[strangler] hook-only mode: payload=%d bytes hash=%s", len(optResult.Payload), optResult.PayloadHash[:12])
+
+		// 1. L1 Cache (Exact Match)
+		if keyConfig.EnableL1 {
+			l1Key := "synapse:l1cache:" + virtualKey + ":" + optResult.PayloadHash
+			cachedResp, err := rdb.Get(ctx, l1Key).Bytes()
+			if err == nil && len(cachedResp) > 0 {
+				if optiagent.ShouldReuseCache(ctx, rdb, bodyBytes, l1Key, cacheTtl, keyConfig.ToolTtls) {
+					if !keyConfig.LimitExceeded {
+						optResult.CacheHitLevel = "L1"
+						optResult.HitResponse = cachedResp
+					}
+				}
+			}
+		}
+
+		// 2. L2 Cache (Semantic Match)
+		if (optResult.CacheHitLevel == "NONE" || optResult.CacheHitLevel == "") && keyConfig.EnableL2 && cache.GlobalEmbedder != nil && !forceDisableL2 {
+			embeddingText, hasImage, _ := optiagent.ExtractTextForEmbedding(bodyBytes)
+			if !hasImage {
+				vector, err := cache.GlobalEmbedder.GenerateEmbedding(embeddingText)
+				if err == nil && len(vector) > 0 {
+					optResult.Vector = vector
+					buf := new(bytes.Buffer)
+					if binary.Write(buf, binary.LittleEndian, vector) == nil {
+						escapedVK := optiagent.EscapeRedisTag(virtualKey)
+						query := "(@vk:{" + escapedVK + "})=>[KNN 1 @vector $query_vec AS score]"
+						res, err := rdb.Do(ctx, "FT.SEARCH", "idx:l2cache", query, "PARAMS", "2", "query_vec", buf.Bytes(), "RETURN", "2", "score", "response", "DIALECT", "2").Result()
+						if err == nil {
+							resArr, ok := res.([]interface{})
+							if ok && len(resArr) > 2 {
+								fields, ok := resArr[2].([]interface{})
+								if ok {
+									var score float64
+									var hitResponse string
+									for i := 0; i < len(fields); i += 2 {
+										key := fields[i].(string)
+										if key == "score" {
+											score, _ = strconv.ParseFloat(fields[i+1].(string), 64)
+										} else if key == "response" {
+											hitResponse = fields[i+1].(string)
+										}
+									}
+									if score < semanticTolerance && hitResponse != "" {
+										docKey, _ := resArr[1].(string)
+										if optiagent.ShouldReuseCache(ctx, rdb, bodyBytes, docKey, cacheTtl, keyConfig.ToolTtls) {
+											if !keyConfig.LimitExceeded {
+												optResult.CacheHitLevel = "L2"
+												optResult.HitResponse = []byte(hitResponse)
+											}
+										}
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+		}
+
 
 		if optResult.CacheHitLevel == "L1" || optResult.CacheHitLevel == "L2" {
 			// Safety net: if the cached payload is an upstream error (e.g. a
@@ -416,7 +508,7 @@ go workers.PushTelemetry(virtualKey, provider, reqModel,
 				optResult.CacheHitLevel, time.Since(startTime), string(bodyBytes), string(optResult.Payload), string(restamped),
 				cachedUsage.CacheCreationTokens, cachedUsage.CacheReadTokens, cachedUsage.CacheHitTokens, cachedUsage.CacheMissTokens,
 				agentSig.ID, agentSig.Label, sessionID, zeroLog, toolCallsStr, keyConfig.LimitExceeded, false,
-				turnCount, convSignature)
+				turnCount, convSignature, workers.BuildPerHookSavingsJSON(hctx))
 
 				if isBenchmark {
 					go runBenchmarkEvaluation(virtualKey, realKey, provider, reqModel, defaultModel, bodyBytes, optResult.Payload, optResult.HitResponse, time.Since(startTime), 0, 0)
@@ -464,7 +556,7 @@ go workers.PushTelemetry(virtualKey, provider, reqModel,
 				"NONE", time.Since(startTime), string(bodyBytes), string(optResult.Payload), `{"error":"kill_switch_hint"}`,
 				0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog,
 				toolCallsStr, keyConfig.LimitExceeded, true,
-				turnCount, convSignature)
+				turnCount, convSignature, workers.BuildPerHookSavingsJSON(hctx))
 			return
 		}
 	}
@@ -487,7 +579,7 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 			0, 0, 0, 0,
 			agentSig.ID, agentSig.Label, sessionID, zeroLog,
 			toolCallsStr, keyConfig.LimitExceeded, false,
-			turnCount, convSignature)
+			turnCount, convSignature, workers.BuildPerHookSavingsJSON(hctx))
 		return
 	}
 
@@ -500,9 +592,9 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 			log.Printf("[ProxyHandler] SOFT LOOP INJECTION: tool=%s count=%d (vk=%s) — injecting warning into prompt and continuing",
 				fpTool, count, virtualKey)
 
-			// Modify optResult.Payload to inject the warning
-			optResult.Payload = injectSystemWarning(optResult.Payload, fpTool)
-			optResult.PromptTokensOpt += 40 // approximate token cost of the warning
+			// TEMPORARY: disable injectSystemWarning for debugging
+			// optResult.Payload = injectSystemWarning(optResult.Payload, fpTool)
+			// optResult.PromptTokensOpt += 40
 
 			// We do NOT return here. We let the modified payload flow upstream!
 			// We clear the fpCount so we don't trigger this again on the same request
@@ -518,7 +610,10 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 		case "google":
 			targetURL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
 		case "minimax":
-			targetURL = "https://api.minimax.io/v1/text/chatcompletion_v2"
+			targetURL = "https://api.minimax.io/v1/chat/completions"
+			if envURL := os.Getenv("MINIMAX_UPSTREAM_URL"); envURL != "" {
+				targetURL = envURL
+			}
 		case "deepseek":
 			targetURL = "https://api.deepseek.com/chat/completions"
 		case "mistral":
@@ -529,6 +624,8 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 			targetURL = "https://api.groq.com/openai/v1/chat/completions"
 		case "together":
 			targetURL = "https://api.together.xyz/v1/chat/completions"
+		case "lmstudio":
+			targetURL = "http://127.0.0.1:1234/v1/chat/completions"
 		case "perplexity":
 			targetURL = "https://api.perplexity.ai/chat/completions"
 		default:
@@ -536,6 +633,7 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 		}
 
 		upstreamPayload := optResult.Payload
+
 		var pMap map[string]interface{}
 		if err := json.Unmarshal(upstreamPayload, &pMap); err == nil {
 			modified := false
@@ -821,865 +919,21 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 	if isResponseIntercepted {
 		resp = finalResponse
 		resp.Body = io.NopCloser(bytes.NewBuffer(finalResponseBytes))
-	} else if resp != nil {
+	} else if resp != nil && finalResponseBytes != nil {
+		// Normal path: resp.Body was consumed by io.ReadAll in the
+		// tool-call interception loop. Re-wrap the bytes we saved.
 		resp.Body = io.NopCloser(bytes.NewBuffer(finalResponseBytes))
+	} else if resp != nil {
+		// Edge case: the for-loop exited without reading the body
+		// (e.g. non-200 status). resp.Body is still the original
+		// stream — leave it untouched for streamResponse to read.
 	}
-	defer resp.Body.Close()
-
-	streamResponse(w, resp, virtualKey, realKey, usedProvider, reqModel, defaultModel, optResult.PayloadHash, reqModel, optResult.Vector, optResult.PromptTokensOrig, optResult.PromptTokensOpt, optResult.CacheHitLevel, isBenchmark, bodyBytes, optResult.Payload, startTime, wantStream, cacheTtl, isNewModel, agentSig.ID, agentSig.Label, sessionID, zeroLog, &l0PublishResponse, toolCallsStr, keyConfig.LimitExceeded, turnCount, convSignature)
-}
-
-func streamResponse(w http.ResponseWriter, resp *http.Response, vk, realKey, provider, model, defaultModel, payloadHash, clientModel string, vector []float32, promptOrig, promptOpt int, cacheLvl string, isBenchmark bool, rawPayload, optPayload []byte, startTime time.Time, wantStream bool, cacheTtl int, isNewModel bool, agentID, agentLabel, sessionID string, zeroLog bool, l0Capture *[]byte, toolCallsStr string, limitExceeded bool, turnCount int, convSignature string) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-
-	upstreamCT := resp.Header.Get("Content-Type")
-	if upstreamCT != "" {
-		w.Header().Set("Content-Type", upstreamCT)
-	} else if wantStream {
-		w.Header().Set("Content-Type", "text/event-stream")
-	} else {
-		w.Header().Set("Content-Type", "application/json")
-	}
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	// Per-request observability headers so the dashboard / Playground can
-	// display stats without re-parsing the response body. Safe to expose:
-	// they only contain aggregate token counts, cache level, and cost
-	// deltas â€” never the prompt content.
-	if cacheLvl != "" {
-		w.Header().Set("X-SynapseProxy-Cache", cacheLvl)
-		w.Header().Set("X-SynapseProxy-Tokens-In", strconv.Itoa(promptOrig))
-		w.Header().Set("X-SynapseProxy-Tokens-Out", strconv.Itoa(promptOpt))
-	}
-	// Quick cost estimate using the same single-class helper as the
-	// legacy dashboard headline. The full 4-class breakdown is computed
-	// post-stream by the telemetry worker.
-	if promptOrig > promptOpt {
-		w.Header().Set("X-SynapseProxy-Cost-Saved", fmt.Sprintf("%.6f", utils.CalculateSavings(provider, model, promptOrig-promptOpt, 0)))
-	}
-
-	// Model re-stamping: if the client asked for a model that we aliased
-	// upstream (e.g. "google/gemma-..." on a MiniMax-backed key), the
-	// upstream will echo its own model name in every chunk. Re-stamp each
-	// `data:` line so the client sees the model it asked for. We only do
-	// the rewrite when clientModel != model (upstream model).
-	needsRestamp := clientModel != "" && clientModel != model
-
-	reader := bufio.NewReader(resp.Body)
-	var fullResponse []byte
-	var firstChunkLogged bool
-
-	// Buffer for the first SSE event (data: {...}) to inspect upstream
-	// application errors (e.g. MiniMax status_code != 0). When detected we
-	// return a real HTTP 402/4xx to the client instead of forwarding a 200
-	// with a poison body (which makes the agent hang waiting for chunks).
-	var firstDataBuf []byte
-	const maxFirstEventBytes = 64 * 1024
-
-	for {
-		line, err := reader.ReadBytes('\n')
-		if len(line) > 0 {
-			if !firstChunkLogged {
-				log.Printf("[streamResponse] Upstream sent first chunk: %s", string(line))
-				firstChunkLogged = true
-			}
-
-			// Re-stamp "model" in `data:` payloads so the client sees the
-			// model it asked for when we have aliased upstream.
-			if needsRestamp && bytes.HasPrefix(line, []byte("data: ")) {
-				line = utils.RestampModel(line, clientModel)
-			}
-
-			// Inspect the first data: line for an application error.
-			if len(firstDataBuf) < maxFirstEventBytes && bytes.HasPrefix(line, []byte("data: ")) {
-				firstDataBuf = append(firstDataBuf, line...)
-				if err := detectUpstreamAppError(firstDataBuf); err != nil {
-					log.Printf("[streamResponse] Upstream application error detected: %v", err)
-					// Reject the request with a real HTTP error and stop streaming.
-					w.Header().Set("Content-Type", "application/json")
-					statusCode := http.StatusBadGateway
-					if err.quota {
-						statusCode = http.StatusPaymentRequired
-					}
-					w.WriteHeader(statusCode)
-					json.NewEncoder(w).Encode(map[string]interface{}{
-						"error": map[string]interface{}{
-							"message": err.message,
-							"type":    "upstream_application_error",
-							"code":    err.statusCode,
-						},
-					})
-					flusher.Flush()
-					return
-				}
-			}
-
-			w.Write(line)
-			flusher.Flush()
-			fullResponse = append(fullResponse, line...)
-		}
-
-		if err != nil {
-			if err != io.EOF {
-				log.Printf("[streamResponse] Read error: %v", err)
-			}
-			break
-		}
-	}
-
-	// Discover the real model name the upstream used. For SSE we have to
-	// reconstruct the full body first; for non-streaming it's already
-	// complete.
-	var cacheableResponse []byte
-	if wantStream {
-		cacheableResponse = reconstructFromSSE(fullResponse, model)
-	} else {
-		cacheableResponse = fullResponse
-	}
-
-	// L0 capture: hand the upstream response back to ProxyHandler so it
-	// can publish it for in-flight coalescing followers. Only valid JSON
-	// (not upstream errors) is propagated.
-	if l0Capture != nil && !wantStream && len(cacheableResponse) > 0 {
-		var jsonMap map[string]interface{}
-		if err := json.Unmarshal(cacheableResponse, &jsonMap); err == nil {
-			if _, hasError := jsonMap["error"]; !hasError {
-				*l0Capture = cacheableResponse
-			}
-		}
-	}
-
-	realModel := extractModelFromResponse(cacheableResponse, model)
-
-	isValidResponse := false
-	if resp.StatusCode == http.StatusOK && len(cacheableResponse) > 0 {
-		isValidResponse = true
-		var jsonMap map[string]interface{}
-		if err := json.Unmarshal(cacheableResponse, &jsonMap); err == nil {
-			if _, hasError := jsonMap["error"]; hasError {
-				isValidResponse = false
-			}
-			if baseResp, hasBaseResp := jsonMap["base_resp"].(map[string]interface{}); hasBaseResp {
-				if statusCode, ok := baseResp["status_code"].(float64); ok && statusCode != 0 {
-					isValidResponse = false
-				}
-			}
-		}
-	}
-
-	if payloadHash != "" && isValidResponse {
-		ctx := context.Background()
-		rdb := db.GetRedis()
-		l1Key := "synapse:l1cache:" + vk + ":" + payloadHash
-		ttl := time.Duration(cacheTtl) * time.Second
-
-		// Zero-Log Mode: we still token-count and measure latency
-		// (metadata is fine) but we do NOT store the response body in
-		// L1/L2 cache, and we do NOT store it as a loop response. The
-		// upstream provider still has the response (we just don't
-		// keep it on our side).
-		if zeroLog {
-			hashPrefix := payloadHash
-			if len(hashPrefix) > 12 {
-				hashPrefix = hashPrefix[:12]
-			}
-			log.Printf("[streamResponse] Zero-Log Mode: skipping L1/L2/loop cache for vk=%s hash=%s", vk, hashPrefix)
-		} else {
-			rdb.Set(ctx, l1Key, cacheableResponse, ttl)
-
-			// Feature 1 (continuation): remember this response as the
-			// "first" of a potential loop. The 3rd+ identical call in the
-			// next 60s will pull this from the loop cache instead of
-			// re-hitting upstream.
-			//
-			// Safety net: don't cache a poisoned response (e.g. a MiniMax
-			// quota error returned as an empty `content:""`). Same check
-			// as the L1 cache.
-			if !utils.IsCachedResponseAnError(cacheableResponse) {
-				optiagent.StoreLoopFirstResponse(ctx, rdb, vk, payloadHash, cacheableResponse)
-			}
-
-			if len(vector) > 0 {
-				buf := new(bytes.Buffer)
-				if binary.Write(buf, binary.LittleEndian, vector) == nil {
-					l2Key := "synapse:l2cache:" + vk + ":" + payloadHash
-					rdb.HSet(ctx, l2Key, "vk", vk, "vector", buf.Bytes(), "response", cacheableResponse)
-					rdb.Expire(ctx, l2Key, ttl)
-				}
-			}
-		}
-	}
-
-	usage := utils.ExtractUsage(cacheableResponse)
-	truePromptTokens := usage.PromptTokens
-	completionTokens := usage.CompletionTokens
-	reasoningTokens := usage.ReasoningTokens
-
-	// Model Radar: two complementary actions.
-	// 1. If a previously-unknown model returned a parseable usage block,
-	//    promote it to "known" so we stop flagging it.
-	// 2. If we still couldn't parse usage from a flagged new model, store
-	//    the raw response so we can later discover its fields.
-	//
-	// Under Zero-Log Mode we skip step 2 entirely (the raw response
-	// contains user content and must never be persisted). Step 1 is
-	// safe because it only stores metadata (the model name), no
-	// content.
-	if isNewModel && !zeroLog {
-		if usage.Source != "estimated" && (usage.PromptTokens > 0 || usage.CompletionTokens > 0) {
-			go workers.PromoteKnown(context.Background(), db.GetRedis(), provider, realModel)
-		} else if usage.PromptTokens == 0 && usage.CompletionTokens == 0 {
-			// CollectSample is non-blocking; we add a follow-up discovery
-			// attempt that runs the FieldDiscoverer on the accumulated
-			// samples once we have enough of them. The goroutine is
-			// safe to fire on every miss because TryDiscoverForModel
-			// is idempotent and the sample list is bounded.
-			go workers.CollectSample(context.Background(), db.GetRedis(), realModel, cacheableResponse)
-			go workers.TryDiscoverForModel(context.Background(), db.GetRedis(), realModel)
-		}
-	}
-
-	if truePromptTokens > 0 {
-		// Calculate ratio of actual billed tokens vs our tiktoken estimation
-		// To safely adjust promptOrig for L3 compression without apples-to-oranges comparison.
-		if cacheLvl == "L3" && promptOpt > 0 {
-			ratio := float64(truePromptTokens) / float64(promptOpt)
-			promptOrig = int(float64(promptOrig) * ratio)
-		}
-
-		promptOpt = truePromptTokens
-
-		// If no optimization was applied (Standard Routing), the original tokens
-		// should match exactly what the provider billed, to avoid false "savings" anomalies.
-		if cacheLvl == "NONE" {
-			promptOrig = truePromptTokens
-		}
-	}
-
-	completionOrig := completionTokens
-	completionOpt := completionTokens
-
-	go workers.PushTelemetry(vk, provider, realModel, promptOrig, completionOrig, promptOpt, completionOpt, reasoningTokens, cacheLvl, time.Since(startTime), string(rawPayload), string(optPayload), string(cacheableResponse), usage.CacheCreationTokens, usage.CacheReadTokens, usage.CacheHitTokens, usage.CacheMissTokens, agentID, agentLabel, sessionID, zeroLog, toolCallsStr, limitExceeded, false, turnCount, convSignature)
-
-	if isBenchmark {
-		go runBenchmarkEvaluation(vk, realKey, provider, realModel, defaultModel, rawPayload, optPayload, cacheableResponse, time.Since(startTime), promptOpt, completionOpt)
-	}
-}
-
-// extractModelFromResponse pulls the upstream model name out of a
-// reconstructed/streamed response. Falls back to the client-supplied
-// reqModel if the response doesn't carry one.
-func extractModelFromResponse(respBytes []byte, fallback string) string {
-	var body struct {
-		Model string `json:"model"`
-	}
-	if err := json.Unmarshal(respBytes, &body); err == nil && body.Model != "" {
-		return body.Model
-	}
-	return fallback
-}
-
-func pickModel(discovered, fallback string) string {
-	if discovered != "" {
-		return discovered
-	}
-	return fallback
-}
-
-func reconstructFromSSE(sseData []byte, model string) []byte {
-	lines := strings.Split(string(sseData), "\n")
-	var contentParts []string
-	var reasoningParts []string
-	var toolCalls []map[string]interface{}
-	discoveredModel := ""
-
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if !strings.HasPrefix(line, "data: ") {
-			continue
-		}
-		data := strings.TrimPrefix(line, "data: ")
-		if data == "[DONE]" {
-			continue
-		}
-
-		var chunk map[string]interface{}
-		if err := json.Unmarshal([]byte(data), &chunk); err == nil {
-			// Capture the upstream model name from the first chunk that
-			// carries it. SSE chunks from OpenAI-compatible providers
-			// include `"model":"..."` in every chunk.
-			if discoveredModel == "" {
-				if m, ok := chunk["model"].(string); ok && m != "" {
-					discoveredModel = m
-				}
-			}
-			if choices, ok := chunk["choices"].([]interface{}); ok && len(choices) > 0 {
-				if choice, ok := choices[0].(map[string]interface{}); ok {
-					if delta, ok := choice["delta"].(map[string]interface{}); ok {
-						if content, ok := delta["content"].(string); ok {
-							contentParts = append(contentParts, content)
-						}
-						if reasoning, ok := delta["reasoning_content"].(string); ok {
-							reasoningParts = append(reasoningParts, reasoning)
-						}
-						if tcs, ok := delta["tool_calls"].([]interface{}); ok {
-							// Merge tool calls by index
-							for _, tcIntf := range tcs {
-								tc, ok := tcIntf.(map[string]interface{})
-								if !ok {
-									continue
-								}
-								index := -1
-								if idxFloat, ok := tc["index"].(float64); ok {
-									index = int(idxFloat)
-								}
-								
-								// Expand toolCalls slice if needed
-								for len(toolCalls) <= index {
-									toolCalls = append(toolCalls, map[string]interface{}{})
-								}
-								
-								if index >= 0 {
-									merged := toolCalls[index]
-									if id, ok := tc["id"].(string); ok {
-										merged["id"] = id
-									}
-									if typ, ok := tc["type"].(string); ok {
-										merged["type"] = typ
-									}
-									if fn, ok := tc["function"].(map[string]interface{}); ok {
-										if merged["function"] == nil {
-											merged["function"] = map[string]interface{}{"name": "", "arguments": ""}
-										}
-										mfn := merged["function"].(map[string]interface{})
-										if name, ok := fn["name"].(string); ok {
-											mfn["name"] = mfn["name"].(string) + name
-										}
-										if args, ok := fn["arguments"].(string); ok {
-											mfn["arguments"] = mfn["arguments"].(string) + args
-										}
-									}
-									toolCalls[index] = merged
-								}
-							}
-						}
-					}
-				}
-			}
-		}
-	}
-
-	fullContent := strings.Join(contentParts, "")
-	fullReasoning := strings.Join(reasoningParts, "")
-
-	message := map[string]interface{}{
-		"role":    "assistant",
-		"content": fullContent,
-	}
-	if fullReasoning != "" {
-		message["reasoning_content"] = fullReasoning
-	}
-	if len(toolCalls) > 0 {
-		message["tool_calls"] = toolCalls
-	}
-
-	resp := map[string]interface{}{
-		"choices": []map[string]interface{}{
-			{"message": message, "finish_reason": "stop", "index": 0},
-		},
-		"model": pickModel(discoveredModel, model),
-	}
-	out, _ := json.Marshal(resp)
-	return out
-}
-
-func streamCachedResponse(w http.ResponseWriter, cachedResp []byte, model string) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(cachedResp)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
-
-	var parsed struct {
-		Choices []struct {
-			Message struct {
-				Content   string                   `json:"content"`
-				ToolCalls []map[string]interface{} `json:"tool_calls"`
-			} `json:"message"`
-		} `json:"choices"`
-	}
-	if err := json.Unmarshal(cachedResp, &parsed); err != nil || len(parsed.Choices) == 0 {
-		w.Header().Set("Content-Type", "application/json")
-		w.Write(cachedResp)
-		return
-	}
-
-	content := parsed.Choices[0].Message.Content
-	toolCalls := parsed.Choices[0].Message.ToolCalls
-
-	if len(toolCalls) > 0 {
-		// Format tool calls for streaming by injecting the "index" property
-		for i, tc := range toolCalls {
-			tc["index"] = i
-		}
-		chunk := map[string]interface{}{
-			"id":      "chatcmpl-cached",
-			"object":  "chat.completion.chunk",
-			"created": time.Now().Unix(),
-			"choices": []map[string]interface{}{
-				{"delta": map[string]interface{}{
-					"role":       "assistant",
-					"content":    content,
-					"tool_calls": toolCalls,
-				}, "index": 0},
-			},
-			"model": model,
-		}
-		data, _ := json.Marshal(chunk)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	} else if content != "" {
-		runes := []rune(content)
-		chunkSize := 15
-		for i := 0; i < len(runes); i += chunkSize {
-			end := i + chunkSize
-			if end > len(runes) {
-				end = len(runes)
-			}
-			chunkText := string(runes[i:end])
-			chunk := map[string]interface{}{
-				"id":      "chatcmpl-cached",
-				"object":  "chat.completion.chunk",
-				"created": time.Now().Unix(),
-				"choices": []map[string]interface{}{
-					{"delta": map[string]string{"content": chunkText}, "index": 0},
-				},
-				"model": model,
-			}
-			data, _ := json.Marshal(chunk)
-			fmt.Fprintf(w, "data: %s\n\n", data)
-			flusher.Flush()
-		}
-	} else {
-		// Empty content, no tools
-		chunk := map[string]interface{}{
-			"id":      "chatcmpl-cached",
-			"object":  "chat.completion.chunk",
-			"created": time.Now().Unix(),
-			"choices": []map[string]interface{}{
-				{"delta": map[string]string{"content": ""}, "index": 0},
-			},
-			"model": model,
-		}
-		data, _ := json.Marshal(chunk)
-		fmt.Fprintf(w, "data: %s\n\n", data)
-		flusher.Flush()
-	}
-	
-	finishReason := "stop"
-	if len(toolCalls) > 0 {
-		finishReason = "tool_calls"
-	}
-
-	// Send the final chunk with finish_reason
-	finalChunk := map[string]interface{}{
-		"id":      "chatcmpl-cached",
-		"object":  "chat.completion.chunk",
-		"created": time.Now().Unix(),
-		"choices": []map[string]interface{}{
-			{"delta": map[string]string{}, "index": 0, "finish_reason": finishReason},
-		},
-		"model": model,
-	}
-	finalData, _ := json.Marshal(finalChunk)
-	fmt.Fprintf(w, "data: %s\n\n", finalData)
-	flusher.Flush()
-
-	fmt.Fprintf(w, "data: [DONE]\n\n")
-	flusher.Flush()
-}
-
-func runBenchmarkEvaluation(vk, realKey, provider, model, defaultModel string, rawPayload, optPayload, optimizedResponse []byte, optDuration time.Duration, promptOpt, completionOpt int) {
-	start := time.Now()
-	
-	var upstreamURL string
-	switch provider {
-	case "anthropic":
-		upstreamURL = "https://api.anthropic.com/v1/messages"
-	case "google":
-		upstreamURL = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
-	case "minimax":
-		upstreamURL = "https://api.minimax.io/v1/text/chatcompletion_v2"
-	case "deepseek":
-		upstreamURL = "https://api.deepseek.com/chat/completions"
-	case "mistral":
-		upstreamURL = "https://api.mistral.ai/v1/chat/completions"
-	case "openrouter":
-		upstreamURL = "https://openrouter.ai/api/v1/chat/completions"
-	case "groq":
-		upstreamURL = "https://api.groq.com/openai/v1/chat/completions"
-	case "together":
-		upstreamURL = "https://api.together.xyz/v1/chat/completions"
-	case "perplexity":
-		upstreamURL = "https://api.perplexity.ai/chat/completions"
-	default:
-		upstreamURL = "https://api.openai.com/v1/chat/completions"
-	}
-	
-	// Create context with timeout for background task to prevent goroutine leak
-	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
-	defer cancel()
-
-	// Rewrite model for the control request if necessary
-	upstreamPayload := rawPayload
-	var pMap map[string]interface{}
-	if err := json.Unmarshal(rawPayload, &pMap); err == nil {
-		forceModel := defaultModel
-		if forceModel == "" {
-			forceModel = os.Getenv("FORCE_MODEL")
-		}
-		if forceModel != "" {
-			pMap["model"] = forceModel
-		}
-		pMap["stream"] = false // Force non-streaming for the benchmark control request
-		delete(pMap, "stream_options") // stream_options is forbidden when stream=false
-		if rewritten, err := json.Marshal(pMap); err == nil {
-			upstreamPayload = rewritten
-		}
-	}
-
-	req, _ := http.NewRequestWithContext(ctx, "POST", upstreamURL, bytes.NewBuffer(upstreamPayload))
-	req.Header.Set("Content-Type", "application/json")
-	if provider == "anthropic" {
-		req.Header.Set("x-api-key", realKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
-	} else {
-		req.Header.Set("Authorization", "Bearer "+realKey)
-	}
-	
-	client := &http.Client{Timeout: 90 * time.Second}
-	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("Benchmark error: %v", err)
+	if resp == nil {
+		log.Printf("[ProxyHandler] resp is nil after upstream — cannot stream response")
+		http.Error(w, `{"error":"upstream returned no response"}`, http.StatusBadGateway)
 		return
 	}
 	defer resp.Body.Close()
-	
-	unoptResp, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode != http.StatusOK {
-		log.Printf("Benchmark control request failed: %s - %s", resp.Status, string(unoptResp))
-	}
-	
-	unoptDuration := time.Since(start)
 
-	extractContent := func(payload []byte) string {
-		var body struct {
-			Choices []struct {
-				Message struct {
-					Content   string      `json:"content"`
-					ToolCalls interface{} `json:"tool_calls"`
-				} `json:"message"`
-			} `json:"choices"`
-		}
-		if err := json.Unmarshal(payload, &body); err == nil && len(body.Choices) > 0 {
-			msg := body.Choices[0].Message
-			if msg.Content != "" {
-				return msg.Content
-			}
-			if msg.ToolCalls != nil {
-				tcBytes, _ := json.Marshal(msg.ToolCalls)
-				return string(tcBytes)
-			}
-		}
-		return ""
-	}
-
-	score := 95
-	feedback := "Fallback mocked score"
-
-	origContent := extractContent(unoptResp)
-	optContent := extractContent(optimizedResponse)
-	
-	if origContent == "" {
-		log.Printf("Benchmark extractContent(unoptResp) failed. Body: %s", string(unoptResp))
-	}
-	if optContent == "" {
-		log.Printf("Benchmark extractContent(optimizedResponse) failed.")
-	}
-
-	if origContent != "" && optContent != "" {
-		evalPrompt := fmt.Sprintf(`Compare Response A and Response B. Rate how semantically similar they are from 0 to 100. Return ONLY a valid JSON object with {"score": <integer>, "feedback": "<1 sentence explanation>"}.
-
-Response A:
-%s
-
-Response B:
-%s`, origContent, optContent)
-
-		evalModel := model
-		forceModel := defaultModel
-		if forceModel == "" {
-			forceModel = os.Getenv("FORCE_MODEL")
-		}
-		if forceModel != "" {
-			evalModel = forceModel
-		}
-
-		evalReqBody := map[string]interface{}{
-			"model": evalModel,
-			"messages": []map[string]string{
-				{"role": "user", "content": evalPrompt},
-			},
-		}
-		evalBodyBytes, _ := json.Marshal(evalReqBody)
-
-		evalReq, _ := http.NewRequestWithContext(ctx, "POST", upstreamURL, bytes.NewBuffer(evalBodyBytes))
-		evalReq.Header.Set("Content-Type", "application/json")
-		if provider == "anthropic" {
-			evalReq.Header.Set("x-api-key", realKey)
-			evalReq.Header.Set("anthropic-version", "2023-06-01")
-		} else {
-			evalReq.Header.Set("Authorization", "Bearer "+realKey)
-		}
-		
-		evalResp, evalErr := client.Do(evalReq)
-		if evalErr == nil {
-			defer evalResp.Body.Close()
-			evalRespBytes, _ := io.ReadAll(evalResp.Body)
-			evalText := extractContent(evalRespBytes)
-			
-			var evalData struct {
-				Score    int    `json:"score"`
-				Feedback string `json:"feedback"`
-			}
-			evalText = strings.TrimSpace(evalText)
-			evalText = strings.TrimPrefix(evalText, "```json\n")
-			evalText = strings.TrimSuffix(evalText, "\n```")
-			evalText = strings.TrimSuffix(evalText, "```")
-			
-			if err := json.Unmarshal([]byte(evalText), &evalData); err == nil {
-				score = evalData.Score
-				feedback = evalData.Feedback
-			}
-		}
-	}
-
-	rdb := db.GetRedis()
-	rdb.XAdd(context.Background(), &redis.XAddArgs{
-		Stream: "synapse:benchmark_logs",
-		Values: map[string]interface{}{
-			"vk": vk,
-			"orig_prompt": string(rawPayload),
-			"opt_prompt": string(optPayload),
-			"opt_resp": string(optimizedResponse),
-			"orig_resp": string(unoptResp),
-			"opt_ms": optDuration.Milliseconds(),
-			"orig_ms": unoptDuration.Milliseconds(),
-			"score": score,
-			"feedback": feedback,
-			"opt_prompt_tokens": promptOpt,
-			"opt_completion_tokens": completionOpt,
-		},
-	})
-}
-
-// appError describes an upstream application-level error that the proxy
-// surfaces to the client as a real HTTP status (instead of forwarding a
-// 200 OK with a poison body that causes the agent to hang).
-type appError struct {
-	statusCode int    // upstream's reported code (e.g. 2056 for MiniMax quota)
-	message    string // human-readable message
-	quota      bool   // true for quota/credit/payment-required errors
-}
-
-// detectUpstreamAppError parses an upstream response body and returns a
-// non-nil *appError if the upstream returned an application-level error
-// (despite the HTTP 200 status). Supports:
-//   - MiniMax: { "base_resp": { "status_code": N, "status_msg": "..." } }
-//   - OpenAI-style: { "error": { "message": "...", "type": "...", "code": ... } }
-//
-// nil means "no error detected, keep streaming".
-func detectUpstreamAppError(body []byte) *appError {
-	if len(body) == 0 {
-		return nil
-	}
-	// Extract the JSON part from an SSE "data: {...}" line.
-	jsonBody := body
-	if bytes.HasPrefix(body, []byte("data: ")) {
-		jsonBody = body[len("data: "):]
-		// SSE may include a trailing "\n\n" after the JSON.
-		if idx := bytes.IndexByte(jsonBody, '\n'); idx > 0 {
-			jsonBody = jsonBody[:idx]
-		}
-	}
-	// Skip the SSE "data: [DONE]" sentinel.
-	if bytes.HasPrefix(jsonBody, []byte("[DONE]")) {
-		return nil
-	}
-	if !bytes.HasPrefix(jsonBody, []byte("{")) {
-		return nil
-	}
-
-	// First, try a generic structure that can hold either base_resp or error.
-	var generic struct {
-		BaseResp *struct {
-			StatusCode int    `json:"status_code"`
-			StatusMsg  string `json:"status_msg"`
-		} `json:"base_resp"`
-		Error *struct {
-			Message string `json:"message"`
-			Type    string `json:"type"`
-			Code    string `json:"code"`
-		} `json:"error"`
-		// Some upstreams (e.g. Anthropic) put code at the top level.
-		TopCode any `json:"code"`
-	}
-	if err := json.Unmarshal(jsonBody, &generic); err != nil {
-		return nil
-	}
-
-	// MiniMax-style: base_resp.status_code != 0 means error.
-	if generic.BaseResp != nil && generic.BaseResp.StatusCode != 0 {
-		msg := generic.BaseResp.StatusMsg
-		if msg == "" {
-			msg = fmt.Sprintf("upstream returned status_code %d", generic.BaseResp.StatusCode)
-		}
-		return &appError{
-			statusCode: generic.BaseResp.StatusCode,
-			message:    msg,
-			quota:      isQuotaError(generic.BaseResp.StatusCode, msg),
-		}
-	}
-
-	// OpenAI-style: { "error": { ... } }
-	if generic.Error != nil && generic.Error.Message != "" {
-		msg := generic.Error.Message
-		return &appError{
-			statusCode: 0,
-			message:    msg,
-			quota:      isQuotaError(0, msg),
-		}
-	}
-
-	return nil
-}
-
-// isQuotaError returns true if the upstream error looks like a quota/credit
-// problem (so the proxy can return HTTP 402 Payment Required to the client).
-func isQuotaError(code int, msg string) bool {
-	m := strings.ToLower(msg)
-	keywords := []string{
-		"quota", "credit", "usage limit", "rate limit", "billing", "plan",
-		"insufficient", "payment", "exhausted",
-	}
-	for _, k := range keywords {
-		if strings.Contains(m, k) {
-			return true
-		}
-	}
-	// MiniMax returns code 2056 for quota and 1002/1003/1004 for billing.
-	if code == 2056 || code == 1002 || code == 1003 || code == 1004 {
-		return true
-	}
-	return false
-}
-
-// maskVirtualKey returns a short, non-secret prefix of the virtual key
-// for safe inclusion in panic / error logs. Format: first 8 chars + "â€¦"
-// (e.g. "sk-optiâ€¦"). Returns "<empty>" for empty input.
-func maskVirtualKey(authHeader string) string {
-	vk := strings.TrimPrefix(authHeader, "Bearer ")
-	vk = strings.TrimSpace(vk)
-	if vk == "" {
-		return "<empty>"
-	}
-	if len(vk) <= 8 {
-		return vk[:min(len(vk), 4)] + "â€¦"
-	}
-	return vk[:8] + "â€¦"
-}
-
-// makeSelfCorrectionResponse constructs a mock Chat Completions response containing the self-correction hint.
-func makeSelfCorrectionResponse(toolName string, model string) []byte {
-	var msgContent string
-	if toolName != "" {
-		msgContent = "Attention : Vous venez de répéter l'outil " + toolName + " avec les mêmes arguments. Veuillez vérifier vos actions précédentes ou changer de stratégie pour éviter une boucle infinie."
-	} else {
-		msgContent = "Attention : Une boucle répétitive a été détectée dans vos requêtes. Veuillez vérifier vos actions précédentes ou changer de stratégie pour éviter une boucle infinie."
-	}
-
-	respObj := map[string]interface{}{
-		"id":      "chatcmpl-selfcorrect",
-		"object":  "chat.completion",
-		"created": time.Now().Unix(),
-		"model":   model,
-		"choices": []map[string]interface{}{
-			{
-				"index": 0,
-				"message": map[string]string{
-					"role":    "assistant",
-					"content": msgContent,
-				},
-				"finish_reason": "stop",
-			},
-		},
-	}
-	respBytes, _ := json.Marshal(respObj)
-	return respBytes
-}
-
-// injectSystemWarning appends a system warning to the last message in the payload
-// to nudge the LLM out of a tool loop without stopping the agent framework.
-func injectSystemWarning(payload []byte, toolName string) []byte {
-	var body map[string]interface{}
-	if err := json.Unmarshal(payload, &body); err != nil {
-		return payload
-	}
-	messagesRaw, ok := body["messages"].([]interface{})
-	if !ok || len(messagesRaw) == 0 {
-		return payload
-	}
-
-	lastMsgRaw := messagesRaw[len(messagesRaw)-1]
-	lastMsg, ok := lastMsgRaw.(map[string]interface{})
-	if !ok {
-		return payload
-	}
-
-	warningText := fmt.Sprintf("\n\n[SYSTEM WARNING: The proxy intercepted your request because you are caught in a loop. You have repeated the tool '%s' with identical arguments too many times. You MUST change your strategy immediately. Do not repeat the same action.]", toolName)
-
-	// Try to append to string content
-	if contentStr, ok := lastMsg["content"].(string); ok {
-		lastMsg["content"] = contentStr + warningText
-	} else if contentArr, ok := lastMsg["content"].([]interface{}); ok {
-		// It's an array of content blocks (OpenAI vision or Anthropic style)
-		contentArr = append(contentArr, map[string]interface{}{
-			"type": "text",
-			"text": warningText,
-		})
-		lastMsg["content"] = contentArr
-	} else {
-		// Fallback: append a user message
-		warningMsg := map[string]interface{}{
-			"role": "user",
-			"content": warningText,
-		}
-		body["messages"] = append(messagesRaw, warningMsg)
-	}
-
-	newPayload, err := json.Marshal(body)
-	if err != nil {
-		return payload
-	}
-	return newPayload
+	streamResponse(w, resp, virtualKey, realKey, usedProvider, reqModel, defaultModel, optResult.PayloadHash, reqModel, optResult.Vector, optResult.PromptTokensOrig, optResult.PromptTokensOpt, optResult.CacheHitLevel, isBenchmark, bodyBytes, optResult.Payload, startTime, wantStream, cacheTtl, isNewModel, agentSig.ID, agentSig.Label, sessionID, zeroLog, &l0PublishResponse, toolCallsStr, keyConfig.LimitExceeded, turnCount, convSignature, hctx)
 }

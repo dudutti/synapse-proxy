@@ -14,6 +14,7 @@ import ParticleBackground from "@/components/ParticleBackground";
 import ReactDiffViewer, { DiffMethod } from 'react-diff-viewer-continued';
 import { LiveTelemetryGrouped, LiveRequest } from "@/components/LiveTelemetryGrouped";
 import { Gauge } from "@/components/ServerHealthCard";
+import { CACHE_LABELS } from "@/lib/cacheLabels";
 
 const formatJSON = (payload: string) => {
   if (!payload) return "";
@@ -380,10 +381,10 @@ export default function Dashboard() {
     : "0.0";
 
   const pieData = [
-    { name: 'L1 Cache (exact)', value: cacheDist.L1, fill: '#3b82f6' },
-    { name: 'L2 Cache (semantic)', value: cacheDist.L2, fill: '#10b981' },
-    { name: 'L3 Standard (compressed)', value: cacheDist.L3, fill: '#a855f7' },
-    { name: 'Standard Routing (no opt)', value: cacheDist.MISS, fill: '#334155' },
+    { name: CACHE_LABELS.L1.label, value: cacheDist.L1, fill: CACHE_LABELS.L1.color },
+    { name: CACHE_LABELS.L2.label, value: cacheDist.L2, fill: CACHE_LABELS.L2.color },
+    { name: CACHE_LABELS.L3.label, value: cacheDist.L3, fill: CACHE_LABELS.L3.color },
+    { name: CACHE_LABELS.NONE.label, value: cacheDist.MISS, fill: CACHE_LABELS.NONE.color },
   ].filter(d => d.value > 0);
 
   const totalReqs = cacheDist.MISS + cacheDist.L1 + cacheDist.L2 + cacheDist.L3;

@@ -2,6 +2,7 @@
 
 import React, { useEffect, useState, memo, useRef } from "react";
 import dynamic from "next/dynamic";
+import { PerHookBreakdown } from "./PerHookBreakdown";
 
 const Globe = dynamic(() => import("./GlobeWrapper"), { ssr: false });
 
@@ -20,6 +21,13 @@ type TelemetryData = {
       L2: number;
       L3: number;
     };
+    hookSavings?: {
+      logCompressor: { bytes: number; tokens: number; count: number };
+      outputReducer: { bytes: number; tokens: number; count: number };
+      ccrCache: { hits: number; bytes: number };
+      tagProtector: { zones: number };
+      synapseRetrieve: { toolsInjected: number };
+    };
   };
   markers: Array<{ location: [number, number]; size: number; color: [number, number, number] }>;
 };
@@ -27,7 +35,7 @@ type TelemetryData = {
 // Memoized Globe component using react-globe.gl (Three.js based, extremely robust)
 const GlobeCanvas = memo(({ markers }: { markers: TelemetryData["markers"] }) => {
   const globeRef = useRef<any>();
-  const [dimensions, setDimensions] = useState({ width: 600, height: 600 });
+  const [dimensions, setDimensions] = useState({ width: 400, height: 400 });
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -64,7 +72,7 @@ const GlobeCanvas = memo(({ markers }: { markers: TelemetryData["markers"] }) =>
   }));
 
   return (
-    <div className="relative w-[400px] h-[400px] md:w-[600px] md:h-[600px] flex-shrink-0" ref={containerRef}>
+    <div className="relative w-[300px] h-[300px] xl:w-[400px] xl:h-[400px] flex-shrink-0" ref={containerRef}>
       <Globe
         innerRef={globeRef}
         width={dimensions.width}
@@ -114,7 +122,7 @@ export function GlobalCommandCenter() {
   const { stats } = data;
 
   return (
-    <div className="relative w-full rounded-3xl overflow-hidden bg-black/60 border border-white/10 p-8 flex flex-col md:flex-row items-center gap-12">
+    <div className="relative w-full rounded-3xl overflow-hidden bg-black/60 border border-white/10 p-8 flex flex-col xl:flex-row items-center justify-between gap-8">
       
       {/* LEFT STATS HUD */}
       <div className="flex-1 space-y-8 z-10">
@@ -156,6 +164,9 @@ export function GlobalCommandCenter() {
           </div>
         </div>
       </div>
+
+      {/* PER-HOOK BREAKDOWN */}
+      <PerHookBreakdown data={data.stats.hookSavings} />
 
       {/* GLOBE CANVAS (Stable, only mounts once) */}
       <GlobeCanvas markers={data.markers} />

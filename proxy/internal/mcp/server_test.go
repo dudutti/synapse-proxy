@@ -3,13 +3,13 @@ package mcp
 import (
 	"context"
 	"encoding/json"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"testing"
 
 	"synapse-proxy/internal/db"
+	"synapse-proxy/optiagent"
 )
 
 func TestMCPInitialize(t *testing.T) {
@@ -78,9 +78,9 @@ func TestMCPToolsList_Free(t *testing.T) {
 		}
 	}
 
-	// Should expose exactly 4 free tools
-	if len(toolsSlice) != 4 {
-		t.Errorf("expected 4 free tools, got %d", len(toolsSlice))
+	// Should expose exactly 7 free tools
+	if len(toolsSlice) != 7 {
+		t.Errorf("expected 7 free tools, got %d", len(toolsSlice))
 	}
 
 	// Verify all tools are free tools (e.g. synapse_chat_completions)
@@ -94,6 +94,9 @@ func TestMCPToolsList_Free(t *testing.T) {
 		"synapse_list_models",
 		"synapse_cache_stats",
 		"synapse_savings_summary",
+		"synapse_inspect_ccr_store",
+		"synapse_get_ccr_value",
+		"synapse_optimize_prompt",
 	}
 	for _, expected := range expectedTools {
 		if !names[expected] {
@@ -127,9 +130,9 @@ func TestMCPToolsList_Full(t *testing.T) {
 		t.Fatalf("expected []Tool tools, got error: %v", err)
 	}
 
-	// Should expose 14 tools (4 free + 10 paid)
-	if len(toolsSlice) != 14 {
-		t.Errorf("expected 14 tools in full tier, got %d", len(toolsSlice))
+	// Should expose 17 tools (7 free + 10 paid)
+	if len(toolsSlice) != 17 {
+		t.Errorf("expected 17 tools in full tier, got %d", len(toolsSlice))
 	}
 }
 
@@ -241,13 +244,6 @@ func TestMCPToolsCall_PaidForwarding(t *testing.T) {
 }
 
 func TestMCPToolsCall_ChatCompletionsLocalMock(t *testing.T) {
-	// Start a mock proxy server on 127.0.0.1:8080 to intercept loopback call
-	l, err := net.Listen("tcp", "127.0.0.1:8080")
-	if err != nil {
-		t.Skipf("cannot listen on 127.0.0.1:8080 (port might be in use, skipping local chat completions mock test): %v", err)
-	}
-	defer l.Close()
-
 	mockProxyResp := map[string]interface{}{
 		"id":      "chatcmpl-mock",
 		"object":  "chat.completion",
@@ -265,8 +261,9 @@ func TestMCPToolsCall_ChatCompletionsLocalMock(t *testing.T) {
 		},
 	}
 
-	mux := http.NewServeMux()
-	mux.HandleFunc("/v1/chat/completions", func(w http.ResponseWriter, r *http.Request) {
+	// Override the proxyHandlerFunc with a mock that returns the pre-canned response
+	oldHandler := proxyHandlerFunc
+	proxyHandlerFunc = func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			t.Errorf("expected POST method, got %s", r.Method)
 		}
@@ -280,13 +277,8 @@ func TestMCPToolsCall_ChatCompletionsLocalMock(t *testing.T) {
 		w.Header().Set("X-SynapseProxy-Cost-Saved", "0.000375")
 		w.WriteHeader(http.StatusOK)
 		json.NewEncoder(w).Encode(mockProxyResp)
-	})
-
-	server := &http.Server{
-		Handler: mux,
 	}
-	go server.Serve(l)
-	defer server.Shutdown(context.Background())
+	defer func() { proxyHandlerFunc = oldHandler }()
 
 	s := NewServerWithDefaults(TierFree, "sk-opti-testkey", "")
 	
@@ -336,6 +328,142 @@ func TestMCPToolsCall_ChatCompletionsLocalMock(t *testing.T) {
 	}
 	if enrichment["tokens_saved"] != "250" {
 		t.Errorf("expected tokens_saved '250', got %v", enrichment["tokens_saved"])
+	}
+}
+
+func TestMCPToolsCall_InspectCCRStore(t *testing.T) {
+	// Setup in-memory store for test
+	store := optiagent.NewInMemoryCompressionStore()
+	store.Save("hash123", []byte("original payload"))
+	
+	oldStore := optiagent.GetGlobalCompressionStore()
+	optiagent.SetGlobalCompressionStore(store)
+	defer optiagent.SetGlobalCompressionStore(oldStore)
+
+	s := NewServerWithDefaults(TierFree, "sk-opti-testkey", "")
+	params := map[string]interface{}{
+		"name":      "synapse_inspect_ccr_store",
+		"arguments": map[string]interface{}{},
+	}
+	req := Request{
+		JSONRPC: "2.0",
+		ID:      101,
+		Method:  "tools/call",
+		Params:  params,
+	}
+	raw, _ := json.Marshal(req)
+
+	resp := s.handle(context.Background(), raw)
+	if resp.Error != nil {
+		t.Fatalf("inspect ccr store failed: %v", resp.Error)
+	}
+
+	resMap, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	content, ok := resMap["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map content, got %T: %+v", resMap["content"], resMap)
+	}
+	count, _ := content["count"].(int)
+	if count != 1 {
+		t.Errorf("expected 1 entry, got %v (raw content: %+v)", count, content)
+	}
+}
+
+func TestMCPToolsCall_GetCCRValue(t *testing.T) {
+	store := optiagent.NewInMemoryCompressionStore()
+	store.Save("hash456", []byte("original content secret"))
+	
+	oldStore := optiagent.GetGlobalCompressionStore()
+	optiagent.SetGlobalCompressionStore(store)
+	defer optiagent.SetGlobalCompressionStore(oldStore)
+
+	s := NewServerWithDefaults(TierFree, "sk-opti-testkey", "")
+	params := map[string]interface{}{
+		"name": "synapse_get_ccr_value",
+		"arguments": map[string]interface{}{
+			"key": "hash456",
+		},
+	}
+	req := Request{
+		JSONRPC: "2.0",
+		ID:      102,
+		Method:  "tools/call",
+		Params:  params,
+	}
+	raw, _ := json.Marshal(req)
+
+	resp := s.handle(context.Background(), raw)
+	if resp.Error != nil {
+		t.Fatalf("get ccr value failed: %v", resp.Error)
+	}
+
+	resMap, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	content, _ := resMap["content"].(map[string]interface{})
+	val, _ := content["value"].(string)
+	if val != "original content secret" {
+		t.Errorf("expected original content secret, got %v", val)
+	}
+}
+
+func TestMCPToolsCall_OptimizePrompt(t *testing.T) {
+	s := NewServerWithDefaults(TierFree, "sk-opti-testkey", "")
+	params := map[string]interface{}{
+		"name": "synapse_optimize_prompt",
+		"arguments": map[string]interface{}{
+			"model": "gpt-4o-mini",
+			"messages": []map[string]string{
+				{"role": "system", "content": "You are a helpful assistant."},
+			},
+		},
+	}
+	req := Request{
+		JSONRPC: "2.0",
+		ID:      103,
+		Method:  "tools/call",
+		Params:  params,
+	}
+	raw, _ := json.Marshal(req)
+
+	resp := s.handle(context.Background(), raw)
+	if resp.Error != nil {
+		t.Fatalf("optimize prompt failed: %v", resp.Error)
+	}
+
+	resMap, ok := resp.Result.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected map result, got %T", resp.Result)
+	}
+	content, ok := resMap["content"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected map content, got %T: %+v", resMap["content"], resMap)
+	}
+	optMsgsVal, exists := content["optimized_messages"]
+	if !exists {
+		t.Fatalf("missing optimized_messages key in: %+v", content)
+	}
+	// Note: in-process return has concrete type []optiagent.Message, NOT []interface{}!
+	optMsgs, ok := optMsgsVal.([]optiagent.Message)
+	if !ok {
+		// Try generic interface slice in case of serialization
+		var interfaceSlice []interface{}
+		interfaceSlice, ok = optMsgsVal.([]interface{})
+		if ok {
+			if len(interfaceSlice) != 1 {
+				t.Errorf("expected 1 optimized message, got %d (interface slice: %+v)", len(interfaceSlice), interfaceSlice)
+			}
+		} else {
+			t.Fatalf("expected []optiagent.Message or []interface{}, got %T: %+v", optMsgsVal, optMsgsVal)
+		}
+	} else {
+		if len(optMsgs) != 1 {
+			t.Errorf("expected 1 optimized message, got %d (msgs: %+v)", len(optMsgs), optMsgs)
+		}
 	}
 }
 

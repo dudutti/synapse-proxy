@@ -107,6 +107,15 @@ model RequestLog {
   savingsCacheCreation Float @default(0) // $ delta on cache_creation tokens (positive = L3 reduced write cost; negative = L3 increased it)
   savingsOutput        Float @default(0) // $ saved on completion tokens
   cacheLevel      String   // "NONE", "L1", "L2", "L3"
+  // P1.5 DASHBOARD FIRST: per-hook savings as a single
+  // JSON blob. This is more flexible than 8 separate
+  // columns and easier to extend without DB migrations.
+  // Schema: {logCompressor: {bytes, tokens, compressions},
+  //          outputReducer: {bytes, tokens},
+  //          ccrCache: {hits, bytesSaved},
+  //          tagProtector: {zones},
+  //          synapseRetrieve: {toolsInjected}}.
+  perHookSavings  String? @db.Text
   durationMs      Int
   payloadHash     String?  // SHA-256 hex of the original request body (filled by proxy L0/L1 path)
   originalPayload String?  @db.Text

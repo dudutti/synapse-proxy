@@ -11,17 +11,25 @@ import (
 
 var rdbClient *redis.Client
 
-// InitRedis connects to Redis and returns the client
+// InitRedis connects to Redis and returns the client.
+// SECURITY: if REDIS_PASSWORD is set in the environment, the
+// client will AUTH on every connection. This is the only way
+// to talk to a production-grade Redis that has `requirepass`
+// configured (see docs/SECURITY.md for the incident that
+// motivated this change: a Redis 7.4.7 instance exposed on
+// the public internet without authentication, on the prod
+// network at 167.233.60.226).
 func InitRedis() {
 	redisAddr := os.Getenv("REDIS_ADDR")
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
 	}
+	redisPassword := os.Getenv("REDIS_PASSWORD")
 	rdbClient = redis.NewClient(&redis.Options{
 		Addr:     redisAddr,
-		Password: "", // no password set
-		DB:       0,  // use default DB
-		Protocol: 2,  // Force RESP2 to return arrays for FT.SEARCH
+		Password: redisPassword, // empty = no AUTH
+		DB:       0,             // use default DB
+		Protocol: 2,             // Force RESP2 to return arrays for FT.SEARCH
 	})
 }
 

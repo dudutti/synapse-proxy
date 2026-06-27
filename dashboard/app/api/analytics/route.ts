@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { getCacheLabel } from "@/lib/cacheLabels";
 import { getServerSession } from "next-auth";
 import { prisma } from "@/lib/prisma";
 
@@ -228,11 +229,8 @@ export async function GET(req: Request) {
   }));
 
   const formattedLogs = logs.map(l => {
-    let typeLabel = "Standard Routing (no opt)";
-    if (l.cacheLevel === "L0") typeLabel = "L0 Coalesced (in-flight)";
-    else if (l.cacheLevel === "L1") typeLabel = "L1 Cache (exact)";
-    else if (l.cacheLevel === "L2") typeLabel = "L2 Cache (semantic)";
-    else if (l.cacheLevel === "L3") typeLabel = "L3 Standard (compressed)";
+    const cl = getCacheLabel(l.cacheLevel);
+    const typeLabel = cl.label;
 
     return {
       id: l.id,

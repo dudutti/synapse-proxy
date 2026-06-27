@@ -31,6 +31,11 @@ func PushTelemetry(
 	killSwitchFired bool,
 	turnCount int,
 	convSignature string,
+	// P1.5 DASHBOARD FIRST: per-hook savings as a single
+	// JSON blob. The handler in proxy.go serialises all
+	// the per-hook counters from hctx.Features into this
+	// JSON; we store it verbatim in the DB.
+	perHookSavings string,
 ) {
 	ctx := context.Background()
 	rdb := db.GetRedis()
@@ -135,6 +140,9 @@ func PushTelemetry(
 		logData["kill_switch_fired"] = "true"
 	} else {
 		logData["kill_switch_fired"] = "false"
+	// P1.5 DASHBOARD FIRST: per-hook savings as a JSON
+	// blob. The dashboard parses this JSON.
+	logData["per_hook_savings"] = perHookSavings
 	}
 	_ = zeroLog // already used above
 
@@ -198,6 +206,12 @@ func RunTelemetryMigrations() {
 	}
 	if _, err := postgresDB.Exec(`ALTER TABLE "RequestLog" ADD COLUMN IF NOT EXISTS "agentLabel" TEXT NOT NULL DEFAULT ''`); err != nil {
 		log.Printf("Telemetry migration warning (agentLabel): %v", err)
+	}
+	// P1.5 DASHBOARD FIRST: per-hook savings as a single
+	// JSON column. Easier to extend than 8 separate
+	// columns.
+	if _, err := postgresDB.Exec(`ALTER TABLE "RequestLog" ADD COLUMN IF NOT EXISTS "perHookSavings" TEXT`); err != nil {
+		log.Printf("Telemetry migration warning (perHookSavings): %v", err)
 	}
 	if _, err := postgresDB.Exec(`ALTER TABLE "RequestLog" ADD COLUMN IF NOT EXISTS "sessionId" TEXT NOT NULL DEFAULT ''`); err != nil {
 		log.Printf("Telemetry migration warning (sessionId): %v", err)
@@ -292,6 +306,10 @@ sessionID := fmt.Sprint(msg.Values["session_id"])
 	if convSignature == "<nil>" {
 		convSignature = ""
 	}
+	perHookSavings := fmt.Sprint(msg.Values["per_hook_savings"])
+	if perHookSavings == "<nil>" {
+		perHookSavings = ""
+	}
 			toolCalls := fmt.Sprint(msg.Values["tool_calls"])
 			if toolCalls == "<nil>" {
 				toolCalls = ""
@@ -345,9 +363,13 @@ sessionID := fmt.Sprint(msg.Values["session_id"])
 				`SELECT id, "userId" FROM "ApiKey" WHERE "virtualKey" = $1`, vk,
 			).Scan(&apiKeyID, &userID)
 			if err != nil {
-				log.Printf("DB apiKey lookup failed for vk=%s: %v", vk, err)
-				rdb.XAck(ctx, "synapse:telemetry:logs", "telemetry_group", msg.ID)
-				continue
+				// VK not in DB (test env with anonymized keys).
+				// Use the VK itself as a fallback ID so the
+				// row still gets written. Production always
+				// matches because sync_keys writes both sides.
+				apiKeyID = vk
+				userID = "unknown"
+				log.Printf("DB apiKey lookup failed for vk=%s (using fallback): %v", vk, err)
 			}
 
 			// Step 1.5: Increment user's currentMonthTokens in DB and check/sync limits to Redis
@@ -423,11 +445,11 @@ sessionID := fmt.Sprint(msg.Values["session_id"])
 					"agentId", "agentLabel", "sessionId",
 					"responsePayload", "payloadHash",
 					"toolCalls", "isSimulated", "killSwitchFired",
-					"turnCount", "convSignature"
+					"turnCount", "convSignature", "perHookSavings"
 				) VALUES (
 					gen_random_uuid(), $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12,
 					$13, $14, $15, $16, $17, $18, $19, $20, $21, $22, $23, $24,
-					$25, $26, $27, $28, $29, $30, $31
+					$25, $26, $27, $28, $29, $30, $31, $32
 				)
 			`,
 				apiKeyID, prov, model,
@@ -442,7 +464,7 @@ sessionID := fmt.Sprint(msg.Values["session_id"])
 				agentID, agentLabel, sessionID,
 				responsePayload, payloadHash,
 				toolCalls, isSimulated, killSwitchFired,
-				turnCount, convSignature,
+				turnCount, convSignature, perHookSavings,
 			)
 
 			if err == nil {

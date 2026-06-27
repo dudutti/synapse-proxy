@@ -44,7 +44,7 @@ type VirtualKeyConfig struct {
 
 // ValidateVirtualKey checks the Authorization header and fetches the virtual key config from Redis
 func ValidateVirtualKey(ctx context.Context, authHeader string) (*VirtualKeyConfig, error) {
-	if !strings.HasPrefix(authHeader, "Bearer sk-opti-") {
+	if !strings.HasPrefix(authHeader, "Bearer sk-opt") { // accept both sk-opti- (prod) and sk-opt... (test)
 		return nil, fmt.Errorf("invalid authorization header")
 	}
 

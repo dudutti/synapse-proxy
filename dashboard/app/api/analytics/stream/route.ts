@@ -1,4 +1,5 @@
 import { NextRequest } from "next/server";
+import { getCacheLabel } from "@/lib/cacheLabels";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { prisma } from "@/lib/prisma";
@@ -78,7 +79,7 @@ export async function GET(req: NextRequest) {
                 savedInput: log.promptTokensOrig - log.promptTokensOpt,
                 savedOutput: log.completionTokensOrig - log.completionTokensOpt,
                 costSaved: Number(log.costSaved) || 0,
-                type: log.cacheLevel === 'NONE' ? 'Standard Routing' : `Cache Hit (${log.cacheLevel})`,
+                type: getCacheLabel(log.cacheLevel).label,
                 agentId: log.agentId || '',
                 agentLabel: log.agentLabel || '',
                 sessionId: log.sessionId || '',

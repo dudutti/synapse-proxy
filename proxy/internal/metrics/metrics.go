@@ -159,6 +159,162 @@ func cacheSavedCostCentsSnapshot() map[string]uint64 {
 	return out
 }
 
+// --- Per-hook metrics (P1.5 DASHBOARD FIRST) -------------------------
+//
+// Each optiagent hook has its own counter set. The
+// dashboard scrapes /metrics and uses these counters
+// to show per-hook savings. Every hook MUST call its
+// Record function (e.g. RecordLogCompressor) so the
+// dashboard reflects reality.
+
+var (
+	// LogCompressor counters.
+	logCompressorBytesSaved   uint64 // total bytes saved by LogCompressorHook
+	logCompressorTokensSaved  uint64 // P1.5: tokens saved (real unit of cost)
+	logCompressorCompressions uint64 // total payloads compressed
+
+	// CCR cache hit counters (by kind: retrieve = hook hit, lookup = new entry).
+	ccrCacheHits      map[string]*uint64 = make(map[string]*uint64)
+	ccrCacheBytesSaved map[string]*uint64 = make(map[string]*uint64) // bytes saved per kind
+
+	// CCR compression store counters.
+	ccrCompressionStoreEntries uint64 // total originals saved in the CompressionStore
+
+	// OutputReducer counters.
+	outputReducerBytesSaved uint64
+	outputReducerTokensSaved uint64 // P1.5: real unit of cost
+
+	// TagProtector counters.
+	tagProtectorZones uint64
+
+	// CCRToolInjection counters.
+	synapseRetrieveToolsInjected uint64
+
+	perHookMetricsMu sync.RWMutex
+)
+
+// RecordLogCompressor increments the LogCompressor counters.
+// Called by LogCompressorHook.AfterResponse when a
+// payload was compressed.
+func RecordLogCompressor(bytesSaved int) {
+	if bytesSaved <= 0 {
+		return
+	}
+	perHookMetricsMu.Lock()
+	atomic.AddUint64(&logCompressorBytesSaved, uint64(bytesSaved))
+	atomic.AddUint64(&logCompressorCompressions, 1)
+	perHookMetricsMu.Unlock()
+	persistent.Submit("log_compressor_bytes_saved_total", float64(bytesSaved))
+	persistent.Submit("log_compressor_compressions_total", 1)
+}
+
+// RecordLogCompressorTokens records tokens saved by the
+// LogCompressorHook. Tokens are the real unit of cost;
+// bytes are a secondary metric for network bandwidth.
+// We track both. The caller is responsible for
+// computing the token count.
+func RecordLogCompressorTokens(tokensSaved int) {
+	if tokensSaved <= 0 {
+		return
+	}
+	perHookMetricsMu.Lock()
+	atomic.AddUint64(&logCompressorTokensSaved, uint64(tokensSaved))
+	perHookMetricsMu.Unlock()
+	persistent.Submit("log_compressor_tokens_saved_total", float64(tokensSaved))
+}
+
+// RecordCCRCacheHit increments the CCR cache hit counter
+// for the given kind ("retrieve" or "lookup").
+func RecordCCRCacheHit(kind string, tokensSaved uint64, costSavedDollars float64) {
+	perHookMetricsMu.Lock()
+	if c := ccrCacheHits[kind]; c != nil {
+		atomic.AddUint64(c, 1)
+	} else {
+		var one uint64 = 1
+		ccrCacheHits[kind] = &one
+	}
+	perHookMetricsMu.Unlock()
+	persistent.Submit("ccr_cache_hits_total{"+kind+"}", 1)
+	if tokensSaved > 0 {
+		persistent.Submit("ccr_tokens_saved_total{"+kind+"}", float64(tokensSaved))
+	}
+	if costSavedDollars > 0 {
+		persistent.Submit("ccr_cost_saved_millicents_total{"+kind+"}", costSavedDollars*1000)
+	}
+}
+
+// RecordCCRCacheHitBytes records bytes saved by the CCR
+// cache (the size of the cached response that was
+// served from cache instead of upstream). The caller
+// passes the kind ("retrieve" or "lookup") and the
+// bytes saved. This is the network-level view of the
+// CCR cache.
+func RecordCCRCacheHitBytes(kind string, bytesSaved uint64) {
+	if bytesSaved == 0 {
+		return
+	}
+	perHookMetricsMu.Lock()
+	if c := ccrCacheBytesSaved[kind]; c != nil {
+		atomic.AddUint64(c, bytesSaved)
+	} else {
+		var zero uint64
+		ccrCacheBytesSaved[kind] = &zero
+		atomic.AddUint64(ccrCacheBytesSaved[kind], bytesSaved)
+	}
+	perHookMetricsMu.Unlock()
+	persistent.Submit("ccr_cache_bytes_saved_total{"+kind+"}", float64(bytesSaved))
+}
+
+// RecordCCRCompressionStore increments the compression
+// store entries counter. Called by LogCompressorHook when
+// it stores an original in the CompressionStore.
+func RecordCCRCompressionStore() {
+	atomic.AddUint64(&ccrCompressionStoreEntries, 1)
+	persistent.Submit("ccr_compression_store_entries_total", 1)
+}
+
+// RecordOutputReducer increments the OutputReducer
+// counter. Called by OutputReducer.Reduce when a response
+// was truncated.
+func RecordOutputReducer(bytesSaved int) {
+	if bytesSaved <= 0 {
+		return
+	}
+	atomic.AddUint64(&outputReducerBytesSaved, uint64(bytesSaved))
+	persistent.Submit("output_reducer_bytes_saved_total", float64(bytesSaved))
+}
+
+// RecordOutputReducerTokens increments the OutputReducer
+// tokens counter. Called by OutputReducer.Reduce when a
+// response was truncated. We track tokens separately
+// from bytes because the real cost is per-token, not
+// per-byte.
+func RecordOutputReducerTokens(tokensSaved int) {
+	if tokensSaved <= 0 {
+		return
+	}
+	atomic.AddUint64(&outputReducerTokensSaved, uint64(tokensSaved))
+	persistent.Submit("output_reducer_tokens_saved_total", float64(tokensSaved))
+}
+
+// RecordTagProtector increments the TagProtector zone
+// counter. Called by TagProtectorHook.AfterResponse.
+func RecordTagProtector(zones int) {
+	if zones <= 0 {
+		return
+	}
+	atomic.AddUint64(&tagProtectorZones, uint64(zones))
+	persistent.Submit("tag_protector_zones_total", float64(zones))
+}
+
+// RecordSynapseRetrieveInjected increments the
+// synapse_retrieve tool injection counter. Called by
+// CCRToolInjectionHook.BeforeRequest.
+func RecordSynapseRetrieveInjected() {
+	atomic.AddUint64(&synapseRetrieveToolsInjected, 1)
+	persistent.Submit("synapse_retrieve_tool_injected_total", 1)
+}
+
 // --- Upstream latency histogram (very coarse) -------------------------
 //
 // Histograms would be ideal here but require a Go library. For now we
@@ -286,6 +442,108 @@ func WritePrometheus(w io.Writer) {
 	fmt.Fprintln(w, "# HELP synapse_proxy_upstream_errors_total Upstream requests with status >= 400")
 	fmt.Fprintln(w, "# TYPE synapse_proxy_upstream_errors_total counter")
 	fmt.Fprintf(w, "synapse_proxy_upstream_errors_total %d\n", upErrsTotal)
+
+	// --- Per-hook metrics (P1.5 DASHBOARD FIRST) ---
+
+	// LogCompressor
+	lcBytes := atomic.LoadUint64(&logCompressorBytesSaved) + uint64(cum["log_compressor_bytes_saved_total"])
+	lcCount := atomic.LoadUint64(&logCompressorCompressions) + uint64(cum["log_compressor_compressions_total"])
+	lcTokens := atomic.LoadUint64(&logCompressorTokensSaved) + uint64(cum["log_compressor_tokens_saved_total"])
+	fmt.Fprintln(w, "# HELP synapse_log_compressor_bytes_saved_total Bytes saved by LogCompressorHook")
+	fmt.Fprintln(w, "# TYPE synapse_log_compressor_bytes_saved_total counter")
+	fmt.Fprintf(w, "synapse_log_compressor_bytes_saved_total %d\n", lcBytes)
+	fmt.Fprintln(w, "# HELP synapse_log_compressor_compressions_total Total payloads compressed")
+	fmt.Fprintln(w, "# TYPE synapse_log_compressor_compressions_total counter")
+	fmt.Fprintf(w, "synapse_log_compressor_compressions_total %d\n", lcCount)
+	fmt.Fprintln(w, "# HELP synapse_log_compressor_tokens_saved_total Tokens saved by LogCompressorHook (real cost unit)")
+	fmt.Fprintln(w, "# TYPE synapse_log_compressor_tokens_saved_total counter")
+	fmt.Fprintf(w, "synapse_log_compressor_tokens_saved_total %d\n", lcTokens)
+
+	// CCR cache hits (by kind).
+	ccrHits := ccrCacheHitsSnapshot()
+	for _, kind := range sortedKeys(ccrHits) {
+		cumKey := "ccr_cache_hits_total{" + kind + "}"
+		total := ccrHits[kind] + uint64(cum[cumKey])
+		fmt.Fprintf(w, "synapse_ccr_cache_hits_total{kind=%q} %d\n", kind, total)
+	}
+	// CCR cache bytes saved (by kind) — network view.
+	ccrBytes := ccrCacheBytesSnapshot()
+	for _, kind := range sortedKeys(ccrBytes) {
+		cumKey := "ccr_cache_bytes_saved_total{" + kind + "}"
+		total := ccrBytes[kind] + uint64(cum[cumKey])
+		fmt.Fprintf(w, "synapse_ccr_cache_bytes_saved_total{kind=%q} %d\n", kind, total)
+	}
+	// CCR compression store entries.
+	ccrStore := atomic.LoadUint64(&ccrCompressionStoreEntries) + uint64(cum["ccr_compression_store_entries_total"])
+	fmt.Fprintln(w, "# HELP synapse_ccr_compression_store_entries_total Originals saved in CompressionStore")
+	fmt.Fprintln(w, "# TYPE synapse_ccr_compression_store_entries_total counter")
+	fmt.Fprintf(w, "synapse_ccr_compression_store_entries_total %d\n", ccrStore)
+
+	// OutputReducer
+	orBytes := atomic.LoadUint64(&outputReducerBytesSaved) + uint64(cum["output_reducer_bytes_saved_total"])
+	fmt.Fprintln(w, "# HELP synapse_output_reducer_bytes_saved_total Bytes saved by OutputReducer")
+	fmt.Fprintln(w, "# TYPE synapse_output_reducer_bytes_saved_total counter")
+	fmt.Fprintf(w, "synapse_output_reducer_bytes_saved_total %d\n", orBytes)
+	orTokens := atomic.LoadUint64(&outputReducerTokensSaved) + uint64(cum["output_reducer_tokens_saved_total"])
+	fmt.Fprintln(w, "# HELP synapse_output_reducer_tokens_saved_total Tokens saved by OutputReducer")
+	fmt.Fprintln(w, "# TYPE synapse_output_reducer_tokens_saved_total counter")
+	fmt.Fprintf(w, "synapse_output_reducer_tokens_saved_total %d\n", orTokens)
+
+	// TagProtector
+	tpZones := atomic.LoadUint64(&tagProtectorZones) + uint64(cum["tag_protector_zones_total"])
+	fmt.Fprintln(w, "# HELP synapse_tag_protector_zones_total Total zones protected by TagProtectorHook")
+	fmt.Fprintln(w, "# TYPE synapse_tag_protector_zones_total counter")
+	fmt.Fprintf(w, "synapse_tag_protector_zones_total %d\n", tpZones)
+
+	// CCRToolInjection
+	sri := atomic.LoadUint64(&synapseRetrieveToolsInjected) + uint64(cum["synapse_retrieve_tool_injected_total"])
+	fmt.Fprintln(w, "# HELP synapse_retrieve_tool_injected_total Total synapse_retrieve tool injections")
+	fmt.Fprintln(w, "# TYPE synapse_retrieve_tool_injected_total counter")
+	fmt.Fprintf(w, "synapse_retrieve_tool_injected_total %d\n", sri)
+}
+
+// ccrCacheHitsSnapshot returns a copy of the per-kind
+// CCR cache hit counts.
+func ccrCacheHitsSnapshot() map[string]uint64 {
+	perHookMetricsMu.RLock()
+	defer perHookMetricsMu.RUnlock()
+	out := make(map[string]uint64, len(ccrCacheHits))
+	for k, v := range ccrCacheHits {
+		out[k] = atomic.LoadUint64(v)
+	}
+	return out
+}
+
+// ccrCacheBytesSnapshot returns a copy of the per-kind
+// CCR cache bytes saved.
+func ccrCacheBytesSnapshot() map[string]uint64 {
+	perHookMetricsMu.RLock()
+	defer perHookMetricsMu.RUnlock()
+	out := make(map[string]uint64, len(ccrCacheBytesSaved))
+	for k, v := range ccrCacheBytesSaved {
+		out[k] = atomic.LoadUint64(v)
+	}
+	return out
+}
+
+// ResetForTest resets all per-hook counters to zero. Used
+// in tests; not for production.
+func ResetForTest() {
+	perHookMetricsMu.Lock()
+	defer perHookMetricsMu.Unlock()
+	atomic.StoreUint64(&logCompressorBytesSaved, 0)
+	atomic.StoreUint64(&logCompressorCompressions, 0)
+	for k := range ccrCacheHits {
+		atomic.StoreUint64(ccrCacheHits[k], 0)
+	}
+	atomic.StoreUint64(&ccrCompressionStoreEntries, 0)
+	atomic.StoreUint64(&outputReducerBytesSaved, 0)
+	atomic.StoreUint64(&outputReducerTokensSaved, 0)
+	for k := range ccrCacheBytesSaved {
+		atomic.StoreUint64(ccrCacheBytesSaved[k], 0)
+	}
+	atomic.StoreUint64(&tagProtectorZones, 0)
+	atomic.StoreUint64(&synapseRetrieveToolsInjected, 0)
 }
 
 // Handler returns an http.HandlerFunc that writes the Prometheus text

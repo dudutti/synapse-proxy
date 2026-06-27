@@ -43,7 +43,7 @@ export default function TokenFlowAnimation({
             <path d="M 0,50 C 30,50 30,50 50,50 C 70,50 70,50 100,50" fill="none" stroke="url(#gradient)" strokeWidth="0.5" strokeDasharray="2,2" />
             <defs>
               <linearGradient id="gradient" x1="0%" y1="0%" x2="100%" y2="0%">
-                <stop offset="0%" stopColor="#71717a" />
+                <stop offset="0%" stopColor="#c084fc" />
                 <stop offset="50%" stopColor="#34d399" />
                 <stop offset="100%" stopColor="#22d3ee" />
               </linearGradient>
@@ -55,12 +55,23 @@ export default function TokenFlowAnimation({
         {active && particles.map(p => (
           <motion.div
             key={p.id}
-            className="absolute w-1.5 h-1.5 rounded-full bg-emerald-400 shadow-[0_0_8px_rgba(52,211,153,0.8)]"
-            style={{ top: `calc(50% + ${p.yOffset}px)`, left: '0%' }}
+            className="absolute rounded-full"
+            style={{ 
+              top: `calc(50% + ${p.yOffset}px)`, 
+              left: '0%',
+              width: '6px',
+              height: '6px'
+            }}
             animate={{
               left: ['0%', '50%', '100%'],
               opacity: [0, 1, 0],
-              scale: [1, 1.5, 0.5],
+              scale: [2.5, 1.2, 0.4],
+              backgroundColor: ['#c084fc', '#34d399', '#22d3ee'],
+              boxShadow: [
+                '0 0 12px rgba(192,132,252,0.8)',
+                '0 0 8px rgba(52,211,153,0.8)',
+                '0 0 4px rgba(34,211,238,0.8)'
+              ]
             }}
             transition={{
               duration: p.duration,
@@ -85,9 +96,9 @@ export default function TokenFlowAnimation({
 
       {/* Right side: Outgoing Tokens */}
       <div className="z-10 flex flex-col items-center">
-        <div className="text-[10px] text-emerald-500/70 uppercase tracking-widest font-bold mb-2">Optimized</div>
+        <div className="text-[10px] text-cyan-400/80 uppercase tracking-widest font-bold mb-2">Optimized Prompt</div>
         <div className="w-16 h-16 rounded-2xl bg-cyan-900/20 border border-cyan-500/30 flex items-center justify-center relative overflow-hidden">
-          <div className="text-xl font-bold text-cyan-300 relative z-10">OUT</div>
+          <div className="text-xl font-bold text-cyan-300 relative z-10">OPT.</div>
           {active && <motion.div animate={{ opacity: [0.1, 0.3, 0.1] }} transition={{ repeat: Infinity, duration: 2, delay: 0.5 }} className="absolute inset-0 bg-cyan-500/20" />}
         </div>
         <div className="text-xs font-mono text-cyan-400 mt-2">{tokensOut.toLocaleString()} tok</div>

@@ -408,7 +408,7 @@ export function ServerHealthCard() {
           value={db.totalCostSaved}
           max={Math.max(100, db.totalCostSaved * 1.2)}
           unit="$"
-          formatter={(v) => `$${v.toFixed(0)}`}
+          formatter={(v) => `$${v.toFixed(4)}`}
           color="amber"
           icon={<DollarIcon />}
         />
@@ -436,14 +436,14 @@ export function ServerHealthCard() {
           label="$ saved (DB) · last 30 samples"
           values={history.costSaved}
           color="#fbbf24"
-          formatter={(v) => `$${v.toFixed(0)}`}
+          formatter={(v) => `$${v.toFixed(4)}`}
           current={db.totalCostSaved}
         />
         <SparklinePanel
           label={"$ saved (DB) \u00b7 last 30 samples"}
           values={history.costSaved}
           color="#fbbf24"
-          formatter={(v) => `$${v.toFixed(0)}`}
+          formatter={(v) => `$${v.toFixed(4)}`}
           current={db.totalCostSaved}
         />
         <SparklinePanel
@@ -551,6 +551,8 @@ export function ServerHealthCard() {
                 const v =
                   m["synapse_proxy_upstream_latency_seconds_bucket"]?.samples?.[
                     `"${label}"`
+                  ] ?? m["synapse_proxy_upstream_latency_seconds_bucket"]?.samples?.[
+                    label
                   ] ?? 0;
                 return (
                   <BarGauge

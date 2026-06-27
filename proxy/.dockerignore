@@ -1,0 +1,27 @@
+# Exclude the locally-downloaded model directory from the Docker
+# build context. The Dockerfile downloads the model itself into
+# a dedicated stage (model-downloader), so we don't need to ship
+# the 470MB safetensors with every build context transfer.
+models/
+target/
+
+# Build artifacts
+*.exe
+*.dll
+*.so
+*.dylib
+*.a
+
+# Test / dev files that shouldn't bloat the image
+*.md
+LICENSE
+.env
+.env.*
+!.env.example
+README*
+
+# Editor / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

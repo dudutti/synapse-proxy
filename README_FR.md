@@ -65,7 +65,11 @@ Bien que la sécurité et l'observabilité soient au cœur du système, Synapse 
   - **L0 In-flight Dedup :** Bloque et déduplique les requêtes concurrentes identiques (idéal pour le fan-out d'agents).
   - **L1 Exact Match :** Correspondance SHA-256 ultra-rapide pour les scripts qui relancent exactement la même requête.
   - **L2 Semantic Match :** Recherche vectorielle basée sur ONNX (MiniLM) pour les requêtes conceptuellement identiques. Désactivé automatiquement sur les conversations multi-tours pour éviter la corruption d'état.
-  - **L3 Compression préservant les préfixes :** Élague intelligemment les anciens blocs `<thought>`, tronque les sorties d'outils surdimensionnées et condense l'historique. Il maintient un préfixe identique à l'octet près afin que le cache de prompt natif du fournisseur (Upstream) reste efficace à 99%.
+  - **L3 Compression préservant les préfixes :** Élague intelligemment les anciens blocs `<thought>`, tronque les sorties d'outils surdimensionnées et condense l'historique. Il maintient un préfixe identique à l'octet près afin que le cache de prompt natif du fournisseur (Upstream) reste efficace à 99%. Comprend plusieurs modules avancés :
+    - **SmartCrusher :** Détecte les grands tableaux JSON homogènes, extrait leur schéma et les compacte sous forme de lignes CSV optimisées. En cas de saturation du contexte, il applique une troncature intelligente (conserve 30% du début et 15% de la fin) avec les métadonnées `_ccr_dropped` pour garantir l'intégrité syntaxique.
+    - **DiffCompressor :** Nettoie les grands diffs git en ne conservant que 2 lignes de contexte inchangées autour des hunks. Les diffs de plus de 50 lignes sont déchargés dans l'archive L3 CCR (Compression Content Repository) et remplacés par des clés d'identification courtes `<<ccr:hash>>`.
+    - **ASTCodeCompressor :** Analyse le code source (Python, Go, JS/TS) et élague le corps des fonctions/classes de plus de 5 lignes, en injectant des commentaires d'élision valides pour économiser jusqu'à 70% de tokens de prompt.
+    - **Optimisation Anthropic KV-Cache :** Injecte automatiquement la directive `"cache_control": {"type": "ephemeral"}` aux endroits stratégiques (system prompt, liste des outils, avant-dernier message utilisateur) pour maximiser le cache de prompt natif d'Anthropic.
   - **Dédoublonnement Sémantique des Outils (Semantic Tool Dedup) :** Intercepte les appels d'outils du LLM et récupère les résultats mis en cache à partir d'appels similaires, court-circuitant ainsi les boucles d'exécution côté client.
 
 <p align="center">
@@ -76,9 +80,14 @@ Bien que la sécurité et l'observabilité soient au cœur du système, Synapse 
 
 ## 🔌 Serveur MCP (Model Context Protocol)
 
-Synapse Proxy agit également comme un serveur MCP robuste, exposant **14 outils spécialisés** (incluant les Benchmarks A/B, l'enregistrement de sessions, la gestion de clés et l'Analytics) directement à votre IDE (Cursor, Claude Code, Continue, etc.).
+Synapse Proxy agit également comme un serveur MCP robuste, exposant **17 outils spécialisés** directement à votre IDE (Cursor, Claude Code, Continue, etc.).
 
-Puisque Synapse Proxy est entièrement open source, **les 14 outils sont totalement gratuits à utiliser** localement ou sur votre instance auto-hébergée.
+Tous les outils sont entièrement gratuits et utilisables localement ou sur votre propre stack. L'outil `synapse_chat_completions` s'exécute désormais **in-process** (entièrement en mémoire via `httptest.NewRecorder()`), ce qui élimine toute dépendance à un port d'écoute HTTP et permet au serveur MCP de tourner hors-ligne en mode stdio (`--mcp`).
+
+Les nouveaux outils locaux intégrés comprennent :
+* **`synapse_inspect_ccr_store`** : Liste toutes les clés et tailles des payloads archivés dans le cache L3 CCR.
+* **`synapse_get_ccr_value`** : Récupère la chaîne de caractères originale correspondant à une référence de clé CCR.
+* **`synapse_optimize_prompt`** : Simule localement le pipeline de compression (BeforeRequest) et retourne le prompt optimisé et les alertes sans appeler de LLM.
 
 ```bash
 # Mode stdio (recommandé pour l'intégration locale de Cursor / IDE)
@@ -88,7 +97,7 @@ Puisque Synapse Proxy est entièrement open source, **les 14 outils sont totalem
 ./synapse-proxy --mcp-http --mcp-http-port=8081 --mcp-tier=full --dashboard-url=http://localhost:3000
 ```
 
-> 📖 **Pour aller plus loin :** Consultez le [Guide du Serveur MCP](docs/mcp_server.md) pour obtenir la liste complète des 14 outils, leurs schémas de paramètres et les instructions de configuration de l'IDE.
+> 📖 **Pour aller plus loin :** Consultez le [Guide du Serveur MCP](docs/mcp_server.md) pour obtenir la liste complète des outils, leurs schémas de paramètres et les instructions de configuration de l'IDE.
 
 ---
 

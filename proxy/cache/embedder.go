@@ -1,3 +1,6 @@
+//go:build local_windows
+// +build local_windows
+
 // Package cache exposes the global L2 semantic-cache embedder.
 //
 // The actual embedding model is implemented in Rust (rust-embedder/) and
@@ -11,11 +14,17 @@
 // runs in-process (no IPC, no sidecar container, no model download at
 // runtime). The shape of the public API was preserved so optiagent/
 // code paths did not have to change.
+//
+// This file is the local-MinGW-gcc variant. The Rust std pulls in
+// Win32 system symbols (BCryptGenRandom, WSA*, NtReadFile, ole32,
+// etc.) that musl on Linux/musl does not have, so the LDFLAGS here
+// include the Win32 libraries. The Docker/Linux/macOS build uses
+// the default embedder.go (no build tag) which has minimal LDFLAGS.
 package cache
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../rust-embedder
-#cgo LDFLAGS: ${SRCDIR}/../rust-embedder/target/release/librust_embedder.a -ldl -lpthread -lm
+#cgo LDFLAGS: ${SRCDIR}/../rust-embedder/target/release/librust_embedder.a -ldl -lpthread -lm -lws2_32 -luserenv -lbcrypt -lntdll -ldbghelp -lole32 -loleaut32 -luuid -ladvapi32 -lkernel32 -lnormaliz
 
 #include <stdlib.h>
 #include <stdint.h>

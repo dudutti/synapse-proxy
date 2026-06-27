@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"sort"
+	"strings"
 	"time"
 
 	"synapse-proxy/internal/db"
@@ -74,6 +76,8 @@ func FetchModelsHandler(w http.ResponseWriter, r *http.Request) {
 		models, fetchErr = fetchMinimaxModels(client, reqData.APIKey)
 	case "openrouter":
 		models, fetchErr = fetchOpenRouterModels(client, reqData.APIKey)
+	case "lmstudio":
+		models, fetchErr = fetchLMStudioModels(client)
 	case "moonshot":
 		models, fetchErr = fetchMoonshotModels(client, reqData.APIKey)
 	default:
@@ -287,7 +291,13 @@ func fetchGoogleModels(client *http.Client, apiKey string) ([]ModelInfo, error) 
 }
 
 func fetchMinimaxModels(client *http.Client, apiKey string) ([]ModelInfo, error) {
-	req, _ := http.NewRequest("GET", "https://api.minimax.io/v1/models", nil)
+	targetURL := "https://api.minimax.io/v1/models"
+	if envURL := os.Getenv("MINIMAX_MODELS_URL"); envURL != "" {
+		targetURL = envURL
+	} else if envBase := os.Getenv("MINIMAX_UPSTREAM_URL"); envBase != "" {
+		targetURL = strings.Replace(envBase, "/chat/completions", "/models", -1)
+	}
+	req, _ := http.NewRequest("GET", targetURL, nil)
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Accept", "application/json")
 
@@ -381,6 +391,38 @@ func fetchMoonshotModels(client *http.Client, apiKey string) ([]ModelInfo, error
 	var models []ModelInfo
 	for _, m := range result.Data {
 		models = append(models, ModelInfo{ID: m.ID, Name: m.ID})
+	}
+	return models, nil
+}
+
+
+func fetchLMStudioModels(client *http.Client) ([]ModelInfo, error) {
+	req, _ := http.NewRequest("GET", "http://127.0.0.1:1234/v1/models", nil)
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("LM Studio error: %d", resp.StatusCode)
+	}
+
+	var result struct {
+		Data []struct {
+			ID   string `json:"id"`
+			Name string `json:"name"`
+		} `json:"data"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return nil, err
+	}
+
+	var models []ModelInfo
+	for _, m := range result.Data {
+		if m.ID != "" {
+			models = append(models, ModelInfo{ID: m.ID, Name: m.ID})
+		}
 	}
 	return models, nil
 }

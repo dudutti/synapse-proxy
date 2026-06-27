@@ -65,7 +65,11 @@ Though security and observability take center stage, Synapse Proxy features a st
   - **L0 In-flight Dedup:** Blocks and deduplicates identical concurrent requests (useful for agent fan-outs).
   - **L1 Exact Match:** Ultra-fast SHA-256 match for scripts retrying the exact same query.
   - **L2 Semantic Match:** ONNX-based vector search (MiniLM) for conceptually identical queries. Auto-disabled on multi-turn conversations to prevent state corruption.
-  - **L3 Prefix-Preserving Compression:** Intelligently prunes stale `<thought>` blocks, truncates oversized tool outputs, and condenses older history. It maintains a byte-exact prefix so the upstream provider's native prompt cache remains 99% effective.
+  - **L3 Prefix-Preserving Compression:** Intelligently prunes stale `<thought>` blocks, truncates oversized tool outputs, and condenses older history. It maintains a byte-exact prefix so the upstream provider's native prompt cache remains 99% effective. Includes advanced hooks:
+    - **SmartCrusher:** Analyzes large homogeneous JSON arrays in prompts, extracts their schema, and packs them into space-optimized CSV formats. When prompt headroom is exhausted, it applies a lossy drop (retaining 30% from the start and 15% from the end) with `_ccr_dropped` metadata to preserve schema validity.
+    - **DiffCompressor:** Trims large git diffs in prompts by retaining only 2 lines of unchanged context around modifications. Diffs exceeding 50 lines are automatically offloaded to the L3 CCR (Compression Content Repository) and replaced with standard `<<ccr:hash>>` reference keys.
+    - **ASTCodeCompressor:** Parses Python, Go, and Javascript/Typescript source files in prompts and strips out function/class bodies longer than 5 lines, replacing them with syntax-valid comments.
+    - **Anthropic KV-Cache Alignment:** Injects `"cache_control": {"type": "ephemeral"}` at strategic boundaries (system prompt, last tool list, second-to-last user turn) to maximize Anthropic's native cache effectiveness.
   - **Semantic Tool Deduplication:** Intercepts LLM tool calls and retrieves cached outputs from similar prior invocations, bypassing client-side execution loops.
 
 <p align="center">
@@ -76,9 +80,14 @@ Though security and observability take center stage, Synapse Proxy features a st
 
 ## 🔌 MCP Server (Model Context Protocol)
 
-Synapse Proxy doubles as a robust MCP server, exposing **14 specialized tools** (including A/B Benchmarks, Session Recording, Key Management, and Analytics) directly to your IDE (Cursor, Claude Code, Continue, etc.).
+Synapse Proxy doubles as a robust MCP server, exposing **17 specialized tools** directly to your IDE (Cursor, Claude Code, Continue, etc.).
 
-Since Synapse Proxy is fully open source, **all 14 tools are completely free to use** locally or on your self-hosted stack.
+All tools are completely free to use locally or on your self-hosted stack. In-process execution of `synapse_chat_completions` runs completely in-memory using `httptest.NewRecorder()`, eliminating loopback HTTP dependencies and allowing the MCP server to run completely offline in stdio mode (`--mcp`).
+
+The newly integrated tools include:
+* **`synapse_inspect_ccr_store`**: Lists all keys and payload sizes currently archived in the L3 CCR store.
+* **`synapse_get_ccr_value`**: Retrieves the original uncompressed payload for a given CCR hash key.
+* **`synapse_optimize_prompt`**: Simulates the prompt optimization hooks locally and returns the compressed payload and alerts without making LLM calls.
 
 ```bash
 # Stdio mode (recommended for local Cursor/IDE integrations)
@@ -88,7 +97,7 @@ Since Synapse Proxy is fully open source, **all 14 tools are completely free to 
 ./synapse-proxy --mcp-http --mcp-http-port=8081 --mcp-tier=full --dashboard-url=http://localhost:3000
 ```
 
-> 📖 **Deep Dive:** Read the [Model Context Protocol (MCP) Guide](docs/mcp_server.md) for the complete list of all 14 tools, parameter schemas, and IDE setup details.
+> 📖 **Deep Dive:** Read the [Model Context Protocol (MCP) Guide](docs/mcp_server.md) for the complete list of all tools, parameter schemas, and IDE setup details.
 
 ---
 

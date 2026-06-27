@@ -86,12 +86,52 @@ export async function GET(req: Request) {
     const totalTokensPassed = originalInput + originalOutput;
     const totalTokensSaved = totalTokensPassed - (optimizedInput + optimizedOutput);
 
+    const recentWithHooks = await prisma.requestLog.findMany({
+      where: { perHookSavings: { not: null } },
+      orderBy: { createdAt: "desc" },
+      take: 1000,
+      select: { perHookSavings: true },
+    });
+    const hookSavings = {
+      logCompressor:   { bytes: 0, tokens: 0, count: 0 },
+      outputReducer:   { bytes: 0, tokens: 0, count: 0 },
+      ccrCache:        { hits: 0, bytes: 0 },
+      tagProtector:    { zones: 0 },
+      synapseRetrieve: { toolsInjected: 0 },
+    };
+    for (const row of recentWithHooks) {
+      try {
+        const r = JSON.parse(row.perHookSavings || "{}");
+        if (r.logCompressor) {
+          hookSavings.logCompressor.bytes += r.logCompressor.bytesSaved || 0;
+          hookSavings.logCompressor.tokens += r.logCompressor.tokensSaved || 0;
+          hookSavings.logCompressor.count += 1;
+        }
+        if (r.outputReducer) {
+          hookSavings.outputReducer.bytes += r.outputReducer.bytesSaved || 0;
+          hookSavings.outputReducer.tokens += r.outputReducer.tokensSaved || 0;
+          hookSavings.outputReducer.count += 1;
+        }
+        if (r.ccrCache) {
+          hookSavings.ccrCache.hits += r.ccrCache.hits || 0;
+          hookSavings.ccrCache.bytes += r.ccrCache.bytesSaved || 0;
+        }
+        if (r.tagProtector) {
+          hookSavings.tagProtector.zones += r.tagProtector.zones || 0;
+        }
+        if (r.synapseRetrieve) {
+          hookSavings.synapseRetrieve.toolsInjected += r.synapseRetrieve.toolsInjected || 0;
+        }
+      } catch {}
+    }
+
     const stats = {
       totalRequests: totals._count.id || 0,
       totalTokensPassed,
       totalTokensSaved,
       totalCostSaved: sum.costSaved || 0,
-      distribution
+      distribution,
+      hookSavings,
     };
 
     // 2. Fetch Recent Logs for Globe Markers

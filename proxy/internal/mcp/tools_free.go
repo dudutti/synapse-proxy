@@ -1,4 +1,4 @@
-﻿// Package mcp — free-tier tools.
+// Package mcp — free-tier tools.
 //
 // All seven tools in this file are powered by data the proxy already
 // computes locally: Redis (cache counters), Postgres (RequestLog,
@@ -13,12 +13,14 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"time"
 
 	"synapse-proxy/internal/db"
+	"synapse-proxy/internal/handlers"
+	"synapse-proxy/optiagent"
 )
 
 // ----------------------------------------------------------------------------
@@ -94,17 +96,56 @@ func (s *Server) registerFreeTools() {
 			[]string{},
 		),
 	}, s.toolSavingsSummary, false)
+
+	s.Register(Tool{
+		Name:        "synapse_inspect_ccr_store",
+		Description: "List all keys and payload sizes currently archived in the L3/CCR compression store.",
+		InputSchema: MustToolInputSchema(map[string]any{}, []string{}),
+	}, s.toolInspectCCRStore, false)
+
+	s.Register(Tool{
+		Name:        "synapse_get_ccr_value",
+		Description: "Retrieve the original uncompressed payload corresponding to a specific CCR hash key.",
+		InputSchema: MustToolInputSchema(
+			map[string]any{
+				"key": map[string]any{"type": "string", "description": "The CCR hash key to lookup."},
+			},
+			[]string{"key"},
+		),
+	}, s.toolGetCCRValue, false)
+
+	s.Register(Tool{
+		Name:        "synapse_optimize_prompt",
+		Description: "Simulate prompt optimization and compression. Runs all registered Synapse hooks (SmartCrusher, DiffCompressor, etc.) and returns the optimized prompt.",
+		InputSchema: MustToolInputSchema(
+			map[string]any{
+				"messages": map[string]any{
+					"type": "array",
+					"items": map[string]any{
+						"type": "object",
+						"properties": map[string]any{
+							"role":    map[string]any{"type": "string"},
+							"content": map[string]any{"type": "string"},
+						},
+						"required": []string{"role", "content"},
+					},
+				},
+				"model": map[string]any{"type": "string", "default": "gpt-4o-mini"},
+			},
+			[]string{"messages", "model"},
+		),
+	}, s.toolOptimizePrompt, false)
 }
 
 // ----------------------------------------------------------------------------
 // Tool implementations
 // ----------------------------------------------------------------------------
 
-// toolChatCompletions forwards a chat completion to the proxy's own
-// /v1/chat/completions endpoint over loopback HTTP. This means the
-// full L1/L2/L3 pipeline runs, telemetry is recorded, and the request
-// shows up in cache_stats and savings — exactly as if a remote SDK
-// had called us.
+var proxyHandlerFunc = handlers.ProxyHandler
+
+// toolChatCompletions forwards a chat completion to the proxy's handler
+// directly in-process using httptest.NewRecorder(). This avoids any network dependency
+// and works even if the proxy is running solely as an MCP server without a TCP listener.
 func (s *Server) toolChatCompletions(ctx context.Context, raw json.RawMessage) (interface{}, error) {
 	var args struct {
 		Messages []struct {
@@ -143,8 +184,7 @@ func (s *Server) toolChatCompletions(ctx context.Context, raw json.RawMessage) (
 	}
 
 	body, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, "POST",
-		"http://127.0.0.1:8080/v1/chat/completions", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, "POST", "/v1/chat/completions", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
@@ -152,33 +192,31 @@ func (s *Server) toolChatCompletions(ctx context.Context, raw json.RawMessage) (
 	if s.virtualKey != "" {
 		req.Header.Set("Authorization", "Bearer "+s.virtualKey)
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("call proxy: %w", err)
-	}
-	defer resp.Body.Close()
 
-	body2, _ := io.ReadAll(resp.Body)
-	if resp.StatusCode >= 400 {
+	rec := httptest.NewRecorder()
+	proxyHandlerFunc(rec, req)
+
+	respBody := rec.Body.Bytes()
+	if rec.Code >= 400 {
 		var errBody map[string]any
-		_ = json.Unmarshal(body2, &errBody)
+		_ = json.Unmarshal(respBody, &errBody)
 		return nil, NewToolError(CodeUpstreamError,
-			fmt.Sprintf("upstream returned %d", resp.StatusCode), errBody)
+			fmt.Sprintf("upstream returned %d", rec.Code), errBody)
 	}
 
 	var result map[string]any
-	if err := json.Unmarshal(body2, &result); err != nil {
+	if err := json.Unmarshal(respBody, &result); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
 	enrichment := map[string]any{}
-	if cl := resp.Header.Get("X-SynapseProxy-Cache"); cl != "" {
+	if cl := rec.Header().Get("X-SynapseProxy-Cache"); cl != "" {
 		enrichment["cache_level"] = cl
 	}
-	if tk := resp.Header.Get("X-SynapseProxy-Tokens-Saved"); tk != "" {
+	if tk := rec.Header().Get("X-SynapseProxy-Tokens-Saved"); tk != "" {
 		enrichment["tokens_saved"] = tk
 	}
-	if cs := resp.Header.Get("X-SynapseProxy-Cost-Saved"); cs != "" {
+	if cs := rec.Header().Get("X-SynapseProxy-Cost-Saved"); cs != "" {
 		enrichment["cost_saved_usd"] = cs
 	}
 	if len(enrichment) > 0 {
@@ -395,23 +433,7 @@ func validGroupBy(g string) bool {
 }
 
 // keyLooksValid returns true if the configured virtual key has the
-// shape of any supported Synapse Proxy or upstream provider key. We
-// accept:
-//
-//   sk-opti-...         (virtual key, SaaS mode)
-//   sk-ant-...          (Anthropic raw key, self-hosted mode)
-//   sk-...              (OpenAI / MiniMax / DeepSeek raw key, self-hosted)
-//
-// In self-hosted mode (tier=free, no dashboard) the user is expected
-// to pass either their upstream key directly OR a virtual key from
-// the dashboard. In SaaS mode (tier=full) the dashboard enforces the
-// sk-opti- prefix on every call. We do NOT enforce the prefix here:
-// the loopback HTTP call to the proxy's own /v1/chat/completions
-// endpoint carries the key verbatim, and the proxy is the source of
-// truth for auth.
-//
-// The check is purely informational — to refuse empty keys and to
-// give the user a sensible 401 if they forgot to set the env var.
+// shape of any supported Synapse Proxy or upstream provider key.
 func (s *Server) keyLooksValid() bool {
 	k := strings.TrimSpace(s.virtualKey)
 	if k == "" {
@@ -420,4 +442,102 @@ func (s *Server) keyLooksValid() bool {
 	return strings.HasPrefix(k, "sk-opti-") ||
 		strings.HasPrefix(k, "sk-ant-") ||
 		strings.HasPrefix(k, "sk-")
+}
+
+// toolInspectCCRStore lists all keys archived in the global CCR CompressionStore.
+func (s *Server) toolInspectCCRStore(ctx context.Context, raw json.RawMessage) (interface{}, error) {
+	store := optiagent.GetGlobalCompressionStore()
+	if store == nil {
+		return nil, NewToolError(CodeInternalError, "compression store not initialized", nil)
+	}
+
+	entries := store.Entries()
+	var out []map[string]any
+	for _, entry := range entries {
+		out = append(out, map[string]any{
+			"key":        entry.Key,
+			"size_bytes": len(entry.Value),
+		})
+	}
+	return map[string]any{"entries": out, "count": len(out)}, nil
+}
+
+// toolGetCCRValue retrieves the original payload corresponding to a CCR key.
+func (s *Server) toolGetCCRValue(ctx context.Context, raw json.RawMessage) (interface{}, error) {
+	var args struct {
+		Key string `json:"key"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, NewToolError(CodeInvalidParams, "invalid arguments", err.Error())
+	}
+	if args.Key == "" {
+		return nil, NewToolError(CodeInvalidParams, "key is required", nil)
+	}
+
+	store := optiagent.GetGlobalCompressionStore()
+	if store == nil {
+		return nil, NewToolError(CodeInternalError, "compression store not initialized", nil)
+	}
+
+	val, err := store.Lookup(args.Key)
+	if err != nil {
+		return nil, fmt.Errorf("lookup ccr key: %w", err)
+	}
+	if val == nil {
+		return nil, NewToolError(CodeInvalidParams, "key not found in compression store", nil)
+	}
+
+	return map[string]any{"value": string(val)}, nil
+}
+
+// toolOptimizePrompt runs all BeforeRequest hooks on a prompt payload without calling the LLM provider.
+func (s *Server) toolOptimizePrompt(ctx context.Context, raw json.RawMessage) (interface{}, error) {
+	var args struct {
+		Messages []optiagent.Message `json:"messages"`
+		Model    string              `json:"model"`
+	}
+	if err := json.Unmarshal(raw, &args); err != nil {
+		return nil, NewToolError(CodeInvalidParams, "invalid arguments", err.Error())
+	}
+	if len(args.Messages) == 0 {
+		return nil, NewToolError(CodeInvalidParams, "messages cannot be empty", nil)
+	}
+	if args.Model == "" {
+		args.Model = "gpt-4o-mini"
+	}
+
+	payload := map[string]interface{}{"model": args.Model, "messages": args.Messages}
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return nil, fmt.Errorf("marshal: %w", err)
+	}
+
+	hctx := &optiagent.HookContext{
+		VK:         s.virtualKey,
+		RawPayload: payloadBytes,
+		Features:   make(map[string]interface{}),
+	}
+
+	optimizedPayload, _ := optiagent.RunBeforeHooks(ctx, hctx)
+
+	var optimizedBody struct {
+		Messages []optiagent.Message `json:"messages"`
+	}
+	if err := json.Unmarshal(optimizedPayload, &optimizedBody); err != nil {
+		return nil, fmt.Errorf("unmarshal optimized payload: %w", err)
+	}
+
+	warnings := []string{}
+	for k, v := range hctx.Features {
+		if strings.HasSuffix(k, "_warning") {
+			if wStr, ok := v.(string); ok {
+				warnings = append(warnings, wStr)
+			}
+		}
+	}
+
+	return map[string]any{
+		"optimized_messages": optimizedBody.Messages,
+		"warnings":           warnings,
+	}, nil
 }

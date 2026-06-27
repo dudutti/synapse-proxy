@@ -19,6 +19,7 @@ import (
 	"synapse-proxy/internal/metrics/persistent"
 	"synapse-proxy/internal/utils"
 	"synapse-proxy/internal/workers"
+	"synapse-proxy/optiagent"
 )
 
 func main() {
@@ -73,6 +74,16 @@ func main() {
 	// 2. Initialize Database Connections
 	db.InitRedis()
 	db.InitPostgres()
+
+	// 2a. Wire the optiagent hook pipeline to the global Redis client.
+	// Hooks that need Redis (Fingerprint, SessionCB, ToolFilter,
+	// ToolDedup, LoopDetection, AgentDiscovery) read it via the
+	// atomic.Pointer set here. Nil-safe: if Redis is unavailable
+	// the hooks fail-open and the request still goes through.
+	optiagent.SetFingerprintRedis(db.GetRedis())
+	optiagent.SetSessionCBBackend(db.GetRedis())
+	optiagent.SetGlobalCompressionStore(optiagent.NewRedisCompressionStore())
+
 
 	// 2b. Boot the persistent metrics mirror. Hydrates the cumulative
 	// counter map from Redis so /metrics shows non-zero totals across

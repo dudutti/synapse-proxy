@@ -26,17 +26,46 @@ const prisma = new PrismaClient();
 //   host:port          ->  socket: { host, port }
 //   host               ->  socket: { host, port: 6379 }
 function parseRedisTarget() {
+  // Format: redis://[:password@]host:port[/db]
+  // SECURITY: this script used to silently drop the password
+  // when REDIS_URL was redis://:password@host:port. The fix
+  // is below: we extract the password from the userinfo part
+  // of the URL. If REDIS_PASSWORD is set explicitly, that
+  // wins (it's the most common way to inject creds in Docker).
   const raw = process.env.REDIS_URL || 'redis://redis:6379';
   // strip scheme
   const stripped = raw.replace(/^redis:\/\//, '').replace(/^rediss:\/\//, '');
-  const [host, portStr] = stripped.split(':');
-  return { host: host || 'redis', port: parseInt(portStr, 10) || 6379 };
+  // Look for userinfo (everything before the first @)
+  let userinfo = '';
+  let rest = stripped;
+  const at = stripped.indexOf('@');
+  if (at >= 0) {
+    userinfo = stripped.slice(0, at);
+    rest = stripped.slice(at + 1);
+  }
+  // userinfo can be `:password` or `user:password`
+  let password = '';
+  if (userinfo) {
+    const colon = userinfo.indexOf(':');
+    password = colon >= 0 ? userinfo.slice(colon + 1) : userinfo;
+  }
+  // env override
+  if (process.env.REDIS_PASSWORD) {
+    password = process.env.REDIS_PASSWORD;
+  }
+  const [host, portStr] = rest.split(':');
+  return {
+    host: host || 'redis',
+    port: parseInt(portStr, 10) || 6379,
+    password,
+  };
 }
 const target = parseRedisTarget();
 const redisClient = redis.createClient({
-  socket: { host: target.host, port: target.port }
+  socket: { host: target.host, port: target.port },
+  ...(target.password ? { password: target.password } : {}),
 });
-console.log(`[sync_keys] Connecting to redis at ${target.host}:${target.port}`);
+console.log(`[sync_keys] Connecting to redis at ${target.host}:${target.port}${target.password ? ' (with auth)' : ''}`);
 
 function getEncryptionKey() {
   const raw = process.env.ENCRYPTION_KEY || '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';

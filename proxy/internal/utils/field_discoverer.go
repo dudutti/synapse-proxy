@@ -218,7 +218,7 @@ func discoverUsage(respBytes []byte) (UsageMapping, bool) {
 	}
 
 	for _, c := range candidates {
-		m := buildMapping(c.leaves)
+		m := buildMapping(c.fullLeaves)
 		if m.PromptField != "" && m.CompletionField != "" {
 			m.SampleCount = 1
 			m.ConfidenceScore = 0.5
@@ -256,13 +256,27 @@ func extractModelID(respBytes []byte) string {
 	return ""
 }
 
-// buildMapping is the shared logic that turns a list of integer leaf
-// names into a UsageMapping. Used by both DiscoverUsageFields (offline)
-// and discoverUsage (per-request).
+// buildMapping is the shared logic that turns a list of paths (either
+// dotted like "meta.usage.request_tokens" or leaf-only like
+// "request_tokens") into a UsageMapping. We strip each entry to its
+// last segment before matching against the pattern sets, since the
+// pattern sets describe leaf field names ("request_tokens") and
+// would never match a full dotted path.
+//
+// The field names stored in the resulting UsageMapping are the
+// ORIGINAL (possibly dotted) paths, so applyMapping can navigate
+// to them at apply time.
 func buildMapping(leaves []string) UsageMapping {
 	m := UsageMapping{}
 	for _, lf := range leaves {
-		leaf := strings.ToLower(lf)
+		// Strip the dotted prefix: "meta.usage.request_tokens" -> "request_tokens".
+		// The last "." is the separator we want; we do this in two
+		// steps so a leaf that already lacks dots is left alone.
+		leafOnly := lf
+		if idx := strings.LastIndex(lf, "."); idx >= 0 {
+			leafOnly = lf[idx+1:]
+		}
+		leaf := strings.ToLower(leafOnly)
 		switch {
 		case matchAny(leaf, promptPatterns):
 			if m.PromptField == "" {
@@ -281,10 +295,15 @@ func buildMapping(leaves []string) UsageMapping {
 	return m
 }
 
-// usageBlock describes a node whose integer leaves look like usage counters.
+// usageBlock describes a node whose integer leaves look like usage
+// counters. fullLeaves holds the dotted-path-from-root for each
+// leaf (e.g. "meta.usage.request_tokens"), which applyMapping uses
+// to navigate to the right field at apply time.
+//
+// path is kept for debug logging only.
 type usageBlock struct {
-	path   string
-	leaves []string
+	path       string
+	fullLeaves []string
 }
 
 func findUsageBlocks(v interface{}, path string) []usageBlock {
@@ -293,10 +312,20 @@ func findUsageBlocks(v interface{}, path string) []usageBlock {
 		return nil
 	}
 	var out []usageBlock
+	// Track leaf names AND their dotted paths so applyMapping can
+	// navigate to the right field later. The path is needed
+	// because usage-like fields can be nested arbitrarily deep
+	// (e.g. meta.usage.request_tokens).
 	intLeaves := []string{}
+	intLeafPaths := []string{}
 	for k, child := range m {
 		if _, isNum := child.(float64); isNum {
 			intLeaves = append(intLeaves, k)
+			full := k
+			if path != "" {
+				full = path + "." + k
+			}
+			intLeafPaths = append(intLeafPaths, full)
 		}
 	}
 	// A block is "usage-like" if it has at least 2 integer leaves whose
@@ -309,7 +338,7 @@ func findUsageBlocks(v interface{}, path string) []usageBlock {
 		}
 	}
 	if hits >= 1 {
-		out = append(out, usageBlock{path: path, leaves: intLeaves})
+		out = append(out, usageBlock{path: path, fullLeaves: intLeafPaths})
 	}
 	for k, child := range m {
 		childPath := k
@@ -348,5 +377,17 @@ func readByPath(generic map[string]interface{}, path string) int {
 			return 0
 		}
 	}
-	return asInt(cur)
+	switch v := cur.(type) {
+case int:
+    return v
+case int64:
+    return int(v)
+case int32:
+    return int(v)
+case uint64:
+    return int(v)
+case float64:
+    return int(v)
+}
+return 0
 }
