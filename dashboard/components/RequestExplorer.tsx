@@ -311,7 +311,7 @@ function RequestDetailDrawer({ id, onClose }: { id: string; onClose: () => void 
   const router = useRouter();
   const [row, setRow] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
-  const [tab, setTab] = useState<"summary" | "original" | "optimized" | "response">("summary");
+  const [tab, setTab] = useState<"pipeline" | "summary" | "original" | "optimized" | "response">("pipeline");
 
   useEffect(() => {
     let cancelled = false;
@@ -391,7 +391,7 @@ function RequestDetailDrawer({ id, onClose }: { id: string; onClose: () => void 
             </div>
 
             <div className="flex items-center gap-1 border-b border-white/10">
-              {(["summary", "original", "optimized", "response"] as const).map((t) => (
+              {(["pipeline", "summary", "original", "optimized", "response"] as const).map((t) => (
                 <button
                   key={t}
                   type="button"
@@ -406,6 +406,9 @@ function RequestDetailDrawer({ id, onClose }: { id: string; onClose: () => void 
             </div>
 
             <div className="bg-black/40 border border-white/10 rounded-lg p-3 max-h-[60vh] overflow-auto">
+              {tab === "pipeline" && (
+                <PipelineDebugger row={row} />
+              )}
               {tab === "summary" && (
                 <pre className="text-[11px] text-zinc-300 font-mono whitespace-pre-wrap break-all leading-relaxed">
 {JSON.stringify(
@@ -537,6 +540,225 @@ function PayloadBlock({ text }: { text: string | null | undefined }) {
       <pre className="text-[11px] text-zinc-200 font-mono whitespace-pre-wrap break-all leading-relaxed">
         {pretty}
       </pre>
+    </div>
+  );
+}
+
+function extractPrompt(payloadStr: string | null | undefined): string {
+  if (!payloadStr) return "";
+  try {
+    const parsed = JSON.parse(payloadStr);
+    if (Array.isArray(parsed.messages)) {
+      return parsed.messages.map((m: any) => `${m.role.toUpperCase()}: ${m.content}`).join("\n");
+    }
+    if (typeof parsed.prompt === "string") {
+      return parsed.prompt;
+    }
+    return JSON.stringify(parsed, null, 2);
+  } catch {
+    return payloadStr;
+  }
+}
+
+function computeLineDiff(original: string, modified: string) {
+  const a = original.split("\n");
+  const b = modified.split("\n");
+  const matrix = Array(a.length + 1).fill(0).map(() => Array(b.length + 1).fill(0));
+
+  for (let i = 1; i <= a.length; i++) {
+    for (let j = 1; j <= b.length; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        matrix[i][j] = matrix[i - 1][j - 1] + 1;
+      } else {
+        matrix[i][j] = Math.max(matrix[i - 1][j], matrix[i][j - 1]);
+      }
+    }
+  }
+
+  const result: { type: "added" | "removed" | "unchanged"; value: string }[] = [];
+  let i = a.length;
+  let j = b.length;
+
+  while (i > 0 || j > 0) {
+    if (i > 0 && j > 0 && a[i - 1] === b[j - 1]) {
+      result.unshift({ type: "unchanged", value: a[i - 1] });
+      i--;
+      j--;
+    } else if (j > 0 && (i === 0 || matrix[i][j - 1] >= matrix[i - 1][j])) {
+      result.unshift({ type: "added", value: b[j - 1] });
+      j--;
+    } else {
+      result.unshift({ type: "removed", value: a[i - 1] });
+      i--;
+    }
+  }
+  return result;
+}
+
+function PipelineDebugger({ row }: { row: any }) {
+  let hooksInfo: any = {};
+  if (row.perHookSavings) {
+    try {
+      hooksInfo = JSON.parse(row.perHookSavings);
+    } catch (e) {
+      console.error("Failed to parse perHookSavings", e);
+    }
+  }
+
+  let compressorName = "None";
+  if (hooksInfo.logCompressor && hooksInfo.logCompressor.compressions > 0) {
+    compressorName = "SmartCrusher (Log Compressor)";
+  } else if (hooksInfo.diffCompressor && hooksInfo.diffCompressor.bytesSaved > 0) {
+    compressorName = "DiffCompressor";
+  } else if (hooksInfo.astCodeCompressor && hooksInfo.astCodeCompressor.bytesSaved > 0) {
+    compressorName = "ASTCodeCompressor";
+  }
+
+  const origPrompt = useMemo(() => extractPrompt(row.originalPayload), [row.originalPayload]);
+  const optPrompt = useMemo(() => extractPrompt(row.optimizedPayload), [row.optimizedPayload]);
+  const diffs = useMemo(() => {
+    if (origPrompt && optPrompt && origPrompt !== optPrompt) {
+      return computeLineDiff(origPrompt, optPrompt);
+    }
+    return [];
+  }, [origPrompt, optPrompt]);
+
+  const hasCompression = diffs.length > 0;
+
+  const isL1 = row.cacheLevel === "L1";
+  const isL2 = row.cacheLevel === "L2";
+  const isL3 = row.cacheLevel === "L3";
+  const isHit = isL1 || isL2 || isL3;
+
+  return (
+    <div className="space-y-6 text-zinc-300">
+      <div className="grid grid-cols-3 gap-2">
+        <div className="p-3 rounded-xl bg-zinc-900/50 border border-white/5 flex flex-col justify-between">
+          <span className="text-[10px] text-zinc-500 uppercase font-black">Cache Status</span>
+          <span className={`text-base font-black ${isHit ? "text-emerald-400" : "text-zinc-400"}`}>
+            {isHit ? `${row.cacheLevel} HIT` : "CACHE MISS"}
+          </span>
+        </div>
+        <div className="p-3 rounded-xl bg-zinc-900/50 border border-white/5 flex flex-col justify-between">
+          <span className="text-[10px] text-zinc-500 uppercase font-black">Latency Saved</span>
+          <span className="text-base font-black text-cyan-400">
+            {isHit ? `~${row.durationMs || 150}ms (est.)` : "0ms"}
+          </span>
+        </div>
+        <div className="p-3 rounded-xl bg-zinc-900/50 border border-white/5 flex flex-col justify-between">
+          <span className="text-[10px] text-zinc-500 uppercase font-black">Cost Saved</span>
+          <span className="text-base font-black text-emerald-400">
+            ${Number(row.costSaved).toFixed(5)}
+          </span>
+        </div>
+      </div>
+
+      <div className="relative pl-6 border-l-2 border-zinc-800 space-y-8 ml-4">
+        <div className="relative">
+          <div className="absolute -left-[31px] top-1.5 w-4 h-4 rounded-full bg-blue-500 border-4 border-[#0a0a0a]" />
+          <div className="space-y-1">
+            <h4 className="font-bold text-zinc-200">1. Receive Request</h4>
+            <p className="text-[11px] text-zinc-500">
+              Input payload received from client. Size: <span className="font-mono text-zinc-400">{row.promptTokensOrig} tokens</span>.
+            </p>
+          </div>
+        </div>
+
+        <div className="relative">
+          <div className={`absolute -left-[31px] top-1.5 w-4 h-4 rounded-full border-4 border-[#0a0a0a] ${hasCompression ? "bg-amber-500 animate-pulse" : "bg-zinc-700"}`} />
+          <div className="space-y-1">
+            <h4 className="font-bold text-zinc-200">2. Optimization & Compression</h4>
+            {hasCompression ? (
+              <p className="text-[11px] text-zinc-500">
+                Applied <span className="text-amber-400 font-bold">{compressorName}</span>. 
+                Prompt reduced to <span className="font-mono text-zinc-400">{row.promptTokensOpt} tokens</span>.
+              </p>
+            ) : (
+              <p className="text-[11px] text-zinc-500">No active compression triggered.</p>
+            )}
+          </div>
+        </div>
+
+        <div className="relative">
+          <div className={`absolute -left-[31px] top-1.5 w-4 h-4 rounded-full border-4 border-[#0a0a0a] ${isHit ? "bg-emerald-500" : "bg-rose-500"}`} />
+          <div className="space-y-1">
+            <h4 className="font-bold text-zinc-200">3. Cache Lookup</h4>
+            <div className="grid grid-cols-3 gap-2 mt-1">
+              <CacheNode label="L1 In-Memory" active={isL1} />
+              <CacheNode label="L2 Semantic" active={isL2} />
+              <CacheNode label="L3 Chunk (CCR)" active={isL3} />
+            </div>
+            {isHit ? (
+              <p className="text-[11px] text-emerald-400/90 mt-1 font-semibold">
+                ✓ Served instantly from {row.cacheLevel} Cache. Bypassed upstream.
+              </p>
+            ) : (
+              <p className="text-[11px] text-zinc-500 mt-1">
+                ✗ Cache miss across L1, L2, L3. Proceeding to provider.
+              </p>
+            )}
+          </div>
+        </div>
+
+        <div className="relative">
+          <div className="absolute -left-[31px] top-1.5 w-4 h-4 rounded-full bg-purple-500 border-4 border-[#0a0a0a]" />
+          <div className="space-y-1">
+            <h4 className="font-bold text-zinc-200">4. Final Resolution</h4>
+            {isHit ? (
+              <p className="text-[11px] text-zinc-500">Returned cached response in <span className="font-mono text-zinc-400">{row.durationMs || 0}ms</span>.</p>
+            ) : (
+              <p className="text-[11px] text-zinc-500">
+                Forwarded to <span className="text-purple-400 font-bold">{row.provider}/{row.model}</span>. 
+                Upstream response received in <span className="font-mono text-zinc-400">{row.durationMs}ms</span>.
+              </p>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {hasCompression && (
+        <div className="space-y-2 border-t border-white/5 pt-4">
+          <div className="flex items-center justify-between">
+            <span className="font-bold text-zinc-300 text-xs uppercase tracking-wider">Prompt Compression Diff</span>
+            <span className="text-[10px] text-zinc-500 font-mono">
+              -{row.promptTokensOrig - row.promptTokensOpt} tokens ({(100 - (row.promptTokensOpt / row.promptTokensOrig) * 100).toFixed(0)}% saved)
+            </span>
+          </div>
+          <div className="bg-black/50 border border-white/10 rounded-lg overflow-hidden max-h-[300px] overflow-y-auto">
+            <div className="p-2 font-mono text-[10px] leading-relaxed space-y-0.5">
+              {diffs.map((d, index) => {
+                if (d.type === "added") {
+                  return (
+                    <div key={index} className="bg-emerald-500/10 text-emerald-400 px-1 border-l-2 border-emerald-500 whitespace-pre-wrap">
+                      + {d.value}
+                    </div>
+                  );
+                }
+                if (d.type === "removed") {
+                  return (
+                    <div key={index} className="bg-rose-500/10 text-rose-400 px-1 border-l-2 border-rose-500 line-through whitespace-pre-wrap">
+                      - {d.value}
+                    </div>
+                  );
+                }
+                return (
+                  <div key={index} className="text-zinc-500 px-1 whitespace-pre-wrap">
+                    &nbsp; {d.value}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function CacheNode({ label, active }: { label: string; active: boolean }) {
+  return (
+    <div className={`p-1.5 rounded text-center border text-[9px] font-bold ${active ? "bg-emerald-500/10 border-emerald-500 text-emerald-300 shadow-md shadow-emerald-500/5" : "bg-white/[0.02] border-white/5 text-zinc-600"}`}>
+      {label}
     </div>
   );
 }
