@@ -134,21 +134,41 @@ export async function GET(req: Request) {
       hookSavings,
     };
 
-    // 2. Fetch Recent Logs for Globe Markers
+    // 2. Fetch Recent Logs for Globe Markers and Arcs
     const recentLogs = await prisma.requestLog.findMany({
       orderBy: { createdAt: 'desc' },
       take: 50,
       select: {
         id: true,
         cacheLevel: true,
+        provider: true,
         createdAt: true
       }
     });
+
+    const proxyCoords = { lat: 50.1109, lng: 8.6821 }; // Frankfurt
+    const providerCoords: Record<string, { lat: number, lng: number }> = {
+      openai: { lat: 41.8781, lng: -87.6298 }, // Chicago
+      anthropic: { lat: 37.4316, lng: -78.6569 }, // N. Virginia
+      google: { lat: 41.2619, lng: -95.8608 }, // Iowa
+      minimax: { lat: 1.3521, lng: 103.8198 }, // Singapore
+      deepseek: { lat: 39.9042, lng: 116.4074 }, // Beijing
+    };
+
+    const arcs: Array<{
+      startLat: number;
+      startLng: number;
+      endLat: number;
+      endLng: number;
+      color: string;
+      dashAnimateTime: number;
+    }> = [];
 
     const markers = recentLogs.map(log => {
       const city = getRandomCity(log.id);
       let size = 0.05;
       let color = [1, 0, 0]; // Red for MISS by default
+      const isHit = log.cacheLevel === "L1" || log.cacheLevel === "L2" || log.cacheLevel === "L3";
 
       if (log.cacheLevel === "L1" || log.cacheLevel === "L2") {
         color = [0.2, 1, 0.2]; // Bright Green for Cache Hit
@@ -158,6 +178,30 @@ export async function GET(req: Request) {
         size = 0.06;
       }
 
+      // User to Proxy (Frankfurt)
+      arcs.push({
+        startLat: city.lat,
+        startLng: city.lng,
+        endLat: proxyCoords.lat,
+        endLng: proxyCoords.lng,
+        color: log.cacheLevel === "L3" ? "#a855f7" : (isHit ? "#10b981" : "#ef4444"),
+        dashAnimateTime: isHit ? 1000 : 2500
+      });
+
+      // Proxy to LLM Provider if Cache Miss
+      if (!isHit) {
+        const prov = (log.provider || "").toLowerCase();
+        const coords = providerCoords[prov] || { lat: 37.7749, lng: -122.4194 }; // San Francisco default
+        arcs.push({
+          startLat: proxyCoords.lat,
+          startLng: proxyCoords.lng,
+          endLat: coords.lat,
+          endLng: coords.lng,
+          color: "#f59e0b",
+          dashAnimateTime: 2500
+        });
+      }
+
       return {
         location: [city.lat, city.lng],
         size,
@@ -165,7 +209,7 @@ export async function GET(req: Request) {
       };
     });
 
-    return { stats, markers };
+    return { stats, markers, arcs };
   });
 
   return NextResponse.json(payload);

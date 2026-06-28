@@ -1,4 +1,4 @@
-﻿import { NextRequest } from "next/server";
+import { NextRequest } from "next/server";
 import { getServerSession } from "next-auth";
 import { authOptions } from "@/lib/authOptions";
 import { prisma } from "@/lib/prisma";
@@ -62,6 +62,7 @@ export async function GET(req: NextRequest) {
               agentLabel: true,
               sessionId: true,
               apiKeyId: true,
+              perHookSavings: true,
             },
           });
 
@@ -86,6 +87,7 @@ export async function GET(req: NextRequest) {
                     agentLabel: log.agentLabel || "",
                     sessionId: log.sessionId || "",
                     apiKeyId: log.apiKeyId,
+                    perHookSavings: log.perHookSavings,
                   })}\n\n`
                 )
               );
