@@ -88,57 +88,56 @@ func ValidateLicense(key string) (bool, error) {
 		return false, fmt.Errorf("empty key")
 	}
 
-	// If it starts with SYNAPSE-, query the cloud verify endpoint!
-	if strings.HasPrefix(key, "SYNAPSE-") {
-		payload := struct {
-			LicenseKey string `json:"licenseKey"`
-		}{
-			LicenseKey: key,
+	// Local offline bypass prefixes (developer use only)
+	if strings.HasPrefix(key, "FREE-") || strings.HasPrefix(key, "PRO-") || strings.HasPrefix(key, "ENT-") {
+		valid := resolveTierAndLimits(key)
+		if !valid {
+			return false, fmt.Errorf("invalid license key signature or format")
 		}
-		body, err := json.Marshal(payload)
-		if err != nil {
-			return false, err
-		}
-
-		client := &http.Client{Timeout: 8 * time.Second}
-		req, err := http.NewRequest("POST", "https://synapse-proxy.com/api/license/verify", bytes.NewBuffer(body))
-		if err != nil {
-			return false, err
-		}
-		req.Header.Set("Content-Type", "application/json")
-
-		resp, err := client.Do(req)
-		if err != nil {
-			return false, fmt.Errorf("failed to reach license server: %w", err)
-		}
-		defer resp.Body.Close()
-
-		if resp.StatusCode != http.StatusOK {
-			return false, fmt.Errorf("license server returned status: %d", resp.StatusCode)
-		}
-
-		var res HeartbeatResponse
-		if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
-			return false, fmt.Errorf("failed to decode server response: %w", err)
-		}
-
-		if !res.Valid {
-			return false, fmt.Errorf("license key is marked invalid by server")
-		}
-
-		ActiveTier = res.Tier
-		QuotaLimit = res.QuotaLimit
-		IsActive = true
-
 		SaveLicenseToDB(key, ActiveTier, QuotaLimit, QuotaUsed)
 		return true, nil
 	}
 
-	// Local verification fallback (for offline developer bypasses)
-	valid := resolveTierAndLimits(key)
-	if !valid {
-		return false, fmt.Errorf("invalid license key signature or format")
+	// Cloud verification: the key is the user's unique UUID from the dashboard
+	payload := struct {
+		LicenseKey string `json:"licenseKey"`
+	}{
+		LicenseKey: key,
 	}
+	body, err := json.Marshal(payload)
+	if err != nil {
+		return false, err
+	}
+
+	client := &http.Client{Timeout: 8 * time.Second}
+	req, err := http.NewRequest("POST", "https://synapse-proxy.com/api/license/verify", bytes.NewBuffer(body))
+	if err != nil {
+		return false, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := client.Do(req)
+	if err != nil {
+		return false, fmt.Errorf("failed to reach license server: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return false, fmt.Errorf("license server returned status: %d", resp.StatusCode)
+	}
+
+	var res HeartbeatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+		return false, fmt.Errorf("failed to decode server response: %w", err)
+	}
+
+	if !res.Valid {
+		return false, fmt.Errorf("license key is marked invalid by server")
+	}
+
+	ActiveTier = res.Tier
+	QuotaLimit = res.QuotaLimit
+	IsActive = true
 
 	SaveLicenseToDB(key, ActiveTier, QuotaLimit, QuotaUsed)
 	return true, nil
@@ -188,8 +187,8 @@ func syncQuotaWithCloud() {
 	_ = db.DB.QueryRow("SELECT license_key, quota_used FROM license_info ORDER BY id DESC LIMIT 1").Scan(&key, &used)
 	licenseMu.RUnlock()
 
-	if key == "" || key == "FREE-TRIAL-KEY" {
-		return // Skip cloud synchronization for offline trial key
+	if key == "" || strings.HasPrefix(key, "FREE-") || strings.HasPrefix(key, "PRO-") || strings.HasPrefix(key, "ENT-") {
+		return // Skip cloud synchronization for offline bypass keys
 	}
 
 	payload := HeartbeatPayload{

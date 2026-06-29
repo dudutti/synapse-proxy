@@ -17,6 +17,7 @@ export async function GET(req: Request) {
       name: true,
       tier: true,
       currentMonthTokens: true,
+      licenseKey: true,
     },
   });
 

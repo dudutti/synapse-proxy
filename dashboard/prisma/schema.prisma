@@ -19,6 +19,7 @@ model User {
   name             String?
   role             Role      @default(USER)
   emailVerified    DateTime?
+  licenseKey       String    @unique @default(uuid()) // Cryptographic license key for local client activation
   
   stripeCustomerId String?   @unique
   stripePriceId    String?

@@ -6,17 +6,17 @@ export const dynamic = "force-dynamic";
 export async function POST(req: NextRequest) {
   try {
     const { licenseKey } = await req.json();
-    if (!licenseKey || !licenseKey.startsWith("SYNAPSE-")) {
+    if (!licenseKey || typeof licenseKey !== "string" || licenseKey.length < 10) {
       return NextResponse.json({ valid: false, error: "Invalid license format" }, { status: 400 });
     }
 
-    const userId = licenseKey.replace("SYNAPSE-", "");
+    // Lookup user by their unique, cryptographically random licenseKey
     const user = await prisma.user.findUnique({
-      where: { id: userId },
+      where: { licenseKey },
     });
 
     if (!user) {
-      return NextResponse.json({ valid: false, error: "User/License not found" }, { status: 404 });
+      return NextResponse.json({ valid: false, error: "License key not found" }, { status: 404 });
     }
 
     let quotaLimit = 10000000; // 10M for FREE

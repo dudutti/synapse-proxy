@@ -1032,12 +1032,12 @@ function SettingsPageContent() {
               </div>
               <div className="flex flex-col sm:flex-row items-center gap-4 relative z-10 bg-black/40 border border-white/10 p-4 rounded-2xl">
                 <code className="text-xs text-emerald-400 font-mono select-all break-all flex-1 text-center sm:text-left">
-                  {userProfile ? `SYNAPSE-${userProfile.id}` : "Loading activation key..."}
+                  {userProfile?.licenseKey || "Loading activation key..."}
                 </code>
                 <button
                   onClick={() => {
-                    if (userProfile) {
-                      navigator.clipboard.writeText(`SYNAPSE-${userProfile.id}`);
+                    if (userProfile?.licenseKey) {
+                      navigator.clipboard.writeText(userProfile.licenseKey);
                       toast.success("License key copied to clipboard!");
                     }
                   }}
