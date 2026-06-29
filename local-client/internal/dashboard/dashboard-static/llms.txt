@@ -1,0 +1,30 @@
+# Synapse Proxy
+
+Synapse Proxy is an open-core AI gateway and network reverse proxy designed to optimize, secure, and monitor LLM api calls (OpenAI, Anthropic, DeepSeek, Google Gemini) in production.
+
+## Key Features
+
+- **Multi-Level Caching (L1/L2/L3)**:
+  - **L1 Exact Cache**: Serves exact prompt matches in <5ms using cryptographic hashing.
+  - **L2 Semantic Cache**: Uses a local ONNX MiniLM embedding model and Redis VSS (Vector Similarity Search) on-premise to match semantically equivalent prompts.
+  - **L3 Context Compression**: Intelligently prunes context windows and chat history, reducing input tokens by 30-50% while preserving meaning.
+- **Agentic Firewall**:
+  - **Loop Detection**: Intercepts infinite tool-calling loops in autonomous agents, injecting system-level recovery instructions.
+  - **Tool Constraints**: Whitelists specific function calls and restricts execution budgets per virtual key.
+  - **PII Redaction**: Automatically hides sensitive personal information from outbound logs.
+- **Model Context Protocol (MCP) Server**:
+  - Exposes 14 system tools for Cursor, Claude Code, and Claude Desktop, enabling developers to monitor cache status, create virtual keys, inspect logs, and manage budgets directly from their IDE.
+
+## API Compatibility
+
+Fully compatible with OpenAI and Anthropic SDKs. Replace the base URL with `https://synapse-proxy.com/v1` (or local equivalent) and use virtual keys (`sk-opti-...`).
+
+## Resources
+
+- [Full Documentation](/llms-full.txt)
+- [LiteLLM Comparison](/compare/litellm)
+- [Portkey Comparison](/compare/portkey)
+- [LLMLingua Comparison](/compare/llmlingua)
+- [Cost Reduction Use Cases](/use-cases/cost-reduction)
+- [Agent Safety Use Cases](/use-cases/agent-safety)
+- [Enterprise Gateway Use Cases](/use-cases/enterprise-gateway)

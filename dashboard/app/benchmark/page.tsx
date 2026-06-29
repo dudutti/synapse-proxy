@@ -32,10 +32,12 @@ export default function BenchmarkPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
 
+  const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
   useEffect(() => {
-    if (status === "unauthenticated") {
+    if (status === "unauthenticated" && !isLocal) {
       router.push("/login");
-    } else if (status === "authenticated") {
+    } else if (status === "authenticated" || isLocal) {
       fetchLogs();
     }
   }, [status, router, page]);
@@ -66,7 +68,7 @@ export default function BenchmarkPage() {
     show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: "easeOut" } }
   };
 
-  if (status === "loading" || loading) return <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">Loading...</div>;
+  if (status === "loading" || (status === "unauthenticated" && !isLocal) || loading) return <div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">Loading...</div>;
 
   return (
     <div className="min-h-screen bg-[#050505] text-white p-8 font-sans relative overflow-hidden">

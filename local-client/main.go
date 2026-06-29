@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -35,6 +36,16 @@ func main() {
 	// 4. Start local proxy router server (Port 8080)
 	proxy.StartProxyServer("8080")
 	fmt.Println("[Proxy] HTTP Proxy server started on port :8080")
+
+	// Register Dashboard API routes
+	http.HandleFunc("/api/keys", proxy.HandleKeysRoute)
+	http.HandleFunc("/api/keys/", proxy.HandleKeysRoute)
+	http.HandleFunc("/api/user", proxy.HandleUserRoute)
+	http.HandleFunc("/api/plans", proxy.HandlePlansRoute)
+	http.HandleFunc("/api/auth/session", proxy.HandleSessionRoute)
+	http.HandleFunc("/api/analytics", proxy.HandleAnalyticsRoute)
+	http.HandleFunc("/api/analytics/stream", proxy.HandleAnalyticsStreamRoute)
+	http.HandleFunc("/api/license/activate", proxy.HandleActivateLicenseRoute)
 
 	// 5. Start embedded Dashboard server (Port 4321)
 	dashboard.StartDashboardServer("4321", proxy.HandleListModels)

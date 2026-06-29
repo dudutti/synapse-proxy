@@ -3,6 +3,7 @@ package proxy
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"math"
 	"math/rand"
@@ -14,6 +15,8 @@ import (
 	"synapse-local/internal/db"
 	"synapse-local/internal/license"
 )
+
+var LogBroadcastChan = make(chan map[string]interface{}, 100)
 
 type ChatCompletionRequest struct {
 	Model    string                   `json:"model"`
@@ -297,6 +300,28 @@ func recordLog(level, model, provider string, tokensIn, tokensOut, tokensInOpt, 
 		INSERT INTO request_logs (id, cache_level, model, provider, tokens_in, tokens_out, tokens_in_opt, tokens_out_opt, duration_ms, cost_saved, agent_id, agent_label, session_id, api_key_id)
 		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '', '', 'local-virtual-key')
 	`, id, level, model, provider, tokensIn, tokensOut, tokensInOpt, tokensOutOpt, duration, cost)
+
+	// Broadcast to active SSE listeners
+	select {
+	case LogBroadcastChan <- map[string]interface{}{
+		"id":             id,
+		"cacheLevel":     level,
+		"model":          model,
+		"provider":       provider,
+		"tokensIn":       tokensIn,
+		"tokensOut":      tokensOut,
+		"tokensInOpt":    tokensInOpt,
+		"tokensOutOpt":   tokensOutOpt,
+		"durationMs":     duration,
+		"costSaved":      cost,
+		"costWithout":    float64(tokensIn)*0.000015 + float64(tokensOut)*0.000015,
+		"costWith":       float64(tokensInOpt)*0.000015 + float64(tokensOutOpt)*0.000015,
+		"createdAt":      time.Now().Format("2006-01-02 15:04:05"),
+		"originalPrompt": "Prompt cached locally",
+	}:
+	default:
+		// Drop if buffer is full / no readers
+	}
 }
 
 func compactPrompt(text string) string {
@@ -317,4 +342,338 @@ func generateID() string {
 		b[i] = chars[rand.Intn(len(chars))]
 	}
 	return string(b)
+}
+
+// HandleKeysRoute manages keys creation, deletion, and listing locally
+func HandleKeysRoute(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method == http.MethodGet {
+		rows, err := db.DB.Query("SELECT id, virtual_key, provider, real_key, default_model FROM virtual_keys ORDER BY created_at DESC")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+
+		var list []map[string]interface{}
+		for rows.Next() {
+			var id, vk, prov, realKey, defModel string
+			if err := rows.Scan(&id, &vk, &prov, &realKey, &defModel); err == nil {
+				list = append(list, map[string]interface{}{
+					"id":                 id,
+					"virtualKey":         vk,
+					"provider":           prov,
+					"realKey":            realKey,
+					"defaultModel":       defModel,
+					"benchmarkMode":      false,
+					"semanticTolerance":  0.15,
+					"cacheTtl":           86400,
+					"isolateCacheByUser": false,
+				})
+			}
+		}
+		if list == nil {
+			list = []map[string]interface{}{}
+		}
+		_ = json.NewEncoder(w).Encode(list)
+		return
+	}
+
+	if r.Method == http.MethodPost {
+		var req struct {
+			Provider     string `json:"provider"`
+			RealKey      string `json:"realKey"`
+			DefaultModel string `json:"defaultModel"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		id := generateID()
+		vk := "sk-opti-" + generateID()[:12]
+		_, err := db.DB.Exec("INSERT INTO virtual_keys (id, virtual_key, provider, real_key, default_model) VALUES (?, ?, ?, ?, ?)", id, vk, req.Provider, req.RealKey, req.DefaultModel)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{
+			"id":         id,
+			"virtualKey": vk,
+		})
+		return
+	}
+
+	if r.Method == http.MethodDelete {
+		parts := strings.Split(r.URL.Path, "/")
+		id := parts[len(parts)-1]
+		if id == "" || id == "keys" {
+			http.Error(w, "missing key id", http.StatusBadRequest)
+			return
+		}
+
+		_, err := db.DB.Exec("DELETE FROM virtual_keys WHERE id = ?", id)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+		return
+	}
+}
+
+// HandleUserRoute handles local user profile query
+func HandleUserRoute(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"id":                 "local-user",
+		"email":              "developer@synapse.local",
+		"tier":               license.ActiveTier,
+		"currentMonthTokens": license.QuotaUsed,
+	})
+}
+
+// HandlePlansRoute returns empty list of plans
+func HandlePlansRoute(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	_ = json.NewEncoder(w).Encode([]interface{}{})
+}
+
+// HandleSessionRoute returns a fake NextAuth session so client logic runs
+func HandleSessionRoute(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"user": map[string]interface{}{
+			"name":  "Local Developer",
+			"email": "developer@synapse.local",
+		},
+		"expires": time.Now().AddDate(1, 0, 0).Format(time.RFC3339),
+	})
+}
+
+// HandleAnalyticsRoute aggregates stats from SQLite request_logs
+func HandleAnalyticsRoute(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	// Query sums from sqlite request_logs
+	var totalIn, totalOut, totalInOpt, totalOutOpt int64
+	var costSaved float64
+	var l1Hits, l2Hits, l3Hits, misses int64
+
+	_ = db.DB.QueryRow(`
+		SELECT 
+			COALESCE(SUM(tokens_in), 0), 
+			COALESCE(SUM(tokens_out), 0), 
+			COALESCE(SUM(tokens_in_opt), 0), 
+			COALESCE(SUM(tokens_out_opt), 0),
+			COALESCE(SUM(cost_saved), 0)
+		FROM request_logs
+	`).Scan(&totalIn, &totalOut, &totalInOpt, &totalOutOpt, &costSaved)
+
+	// Fetch cache levels count
+	rows, err := db.DB.Query("SELECT cache_level, COUNT(*) FROM request_logs GROUP BY cache_level")
+	if err == nil {
+		for rows.Next() {
+			var lvl string
+			var count int64
+			if err := rows.Scan(&lvl, &count); err == nil {
+				switch lvl {
+				case "L1":
+					l1Hits = count
+				case "L2":
+					l2Hits = count
+				case "L3":
+					l3Hits = count
+				default:
+					misses = count
+				}
+			}
+		}
+		rows.Close()
+	}
+
+	// Fetch recent 100 logs
+	logRows, err := db.DB.Query(`
+		SELECT id, cache_level, model, provider, tokens_in, tokens_out, tokens_in_opt, tokens_out_opt, duration_ms, cost_saved, created_at 
+		FROM request_logs 
+		ORDER BY created_at DESC 
+		LIMIT 100
+	`)
+	var logs []map[string]interface{}
+	if err == nil {
+		defer logRows.Close()
+		for logRows.Next() {
+			var id, cacheLvl, model, prov, createdAt string
+			var tIn, tOut, tInOpt, tOutOpt, duration int64
+			var cSaved float64
+			if err := logRows.Scan(&id, &cacheLvl, &model, &prov, &tIn, &tOut, &tInOpt, &tOutOpt, &duration, &cSaved, &createdAt); err == nil {
+				logs = append(logs, map[string]interface{}{
+					"id":             id,
+					"cacheLevel":     cacheLvl,
+					"model":          model,
+					"provider":       prov,
+					"tokensIn":       tIn,
+					"tokensOut":      tOut,
+					"tokensInOpt":    tInOpt,
+					"tokensOutOpt":   tOutOpt,
+					"durationMs":     duration,
+					"costSaved":      cSaved,
+					"costWithout":    float64(tIn)*0.000015 + float64(tOut)*0.000015,
+					"costWith":       float64(tInOpt)*0.000015 + float64(tOutOpt)*0.000015,
+					"createdAt":      createdAt,
+					"originalPrompt": "Prompt cached locally",
+				})
+			}
+		}
+	}
+	if logs == nil {
+		logs = []map[string]interface{}{}
+	}
+
+	res := AnalyticsResponse{
+		TotalTokensSent: map[string]int64{
+			"total":  totalIn + totalOut,
+			"input":  totalIn,
+			"output": totalOut,
+		},
+		TotalTokensOptimized: map[string]int64{
+			"total":  totalInOpt + totalOutOpt,
+			"input":  totalInOpt,
+			"output": totalOutOpt,
+		},
+		CacheHitDistribution: map[string]int64{
+			"MISS": misses,
+			"L1":   l1Hits,
+			"L2":   l2Hits,
+			"L3":   l3Hits,
+		},
+		CacheByProvider:          map[string]interface{}{},
+		CacheHitRateByProvider:   map[string]float64{},
+		MeasuredSavings: map[string]int64{
+			"l1L2Hits":        l1Hits + l2Hits,
+			"l3Compressions": l3Hits,
+		},
+		OpportunitySavings: map[string]interface{}{
+			"highCacheReadProviders": []string{},
+		},
+		TotalSavingsByClass: map[string]float64{
+			"inputFresh":    0,
+			"cacheRead":     costSaved,
+			"cacheCreation": 0,
+			"output":        0,
+		},
+		SavingsByClassByProvider: map[string]interface{}{},
+		TotalSavingsReal:         costSaved,
+		ChartData:                []interface{}{},
+		Logs:                     logs,
+	}
+
+	_ = json.NewEncoder(w).Encode(res)
+}
+
+type AnalyticsResponse struct {
+	TotalTokensSent          map[string]int64  `json:"totalTokensSent"`
+	TotalTokensOptimized     map[string]int64  `json:"totalTokensOptimized"`
+	CacheHitDistribution    map[string]int64  `json:"cacheHitDistribution"`
+	CacheByProvider          map[string]interface{} `json:"cacheByProvider"`
+	CacheHitRateByProvider   map[string]float64 `json:"cacheHitRateByProvider"`
+	MeasuredSavings          map[string]int64  `json:"measuredSavings"`
+	OpportunitySavings       map[string]interface{} `json:"opportunitySavings"`
+	TotalSavingsByClass      map[string]float64 `json:"totalSavingsByClass"`
+	SavingsByClassByProvider map[string]interface{} `json:"savingsByClassByProvider"`
+	TotalSavingsReal         float64           `json:"totalSavingsReal"`
+	ChartData                []interface{}     `json:"chartData"`
+	Logs                     []map[string]interface{} `json:"logs"`
+}
+
+// HandleActivateLicenseRoute validates a license key with cloud and saves locally
+func HandleActivateLicenseRoute(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Key string `json:"key"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	ok, err := license.ValidateLicense(req.Key)
+	if err != nil || !ok {
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"error": "Invalid or expired license key"})
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"tier":    license.ActiveTier,
+	})
+}
+
+// HandleAnalyticsStreamRoute serves real-time telemetry events via Server-Sent Events (SSE)
+func HandleAnalyticsStreamRoute(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "Streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+
+	// Establish connection
+	fmt.Fprintf(w, "data: {\"connected\": true}\n\n")
+	flusher.Flush()
+
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case logEvent := <-LogBroadcastChan:
+			data, err := json.Marshal(logEvent)
+			if err == nil {
+				fmt.Fprintf(w, "data: %s\n\n", string(data))
+				flusher.Flush()
+			}
+		case <-ticker.C:
+			fmt.Fprintf(w, ": keepalive\n\n")
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
 }

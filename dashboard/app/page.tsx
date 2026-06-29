@@ -218,13 +218,15 @@ export default function Dashboard() {
     return () => window.removeEventListener("keydown", onKey);
   }, [sessionResult]);
 
+  const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
   // SWR-backed keys fetch. The cache is shared across client-side
   // route transitions, so navigating away and back to the home page
   // serves the previous list instantly while SWR revalidates in the
   // background. The /api/keys payload is small (<10 keys per user)
   // so the cache hit is essentially free.
   const { data: swrKeys } = useSWR<any[]>(
-    status === "authenticated" ? "/api/keys" : null
+    (status === "authenticated" || isLocal) ? "/api/keys" : null
   );
   useEffect(() => {
     if (swrKeys) setApiKeys(swrKeys || []);
@@ -247,7 +249,7 @@ export default function Dashboard() {
   // (tracked via seenLogIds so we don't double-count), and add
   // any new rows from the SWR response. SWR still drives the
   // chart/totals revalidation, only the row list is append-only.
-  const analyticsKey = status === "authenticated"
+  const analyticsKey = (status === "authenticated" || isLocal)
     ? `/api/analytics?page=${page}&limit=100&days=${daysFilter}${selectedKey ? `&keyId=${selectedKey}` : ""}`
     : null;
   const { data: swrAnalytics } = useSWR<any>(analyticsKey);
@@ -291,9 +293,9 @@ export default function Dashboard() {
   }, [swrAnalytics]);
 
   useEffect(() => {
-    if (status === "unauthenticated") {
+    if (status === "unauthenticated" && !isLocal) {
       router.push("/login");
-    } else if (status === "authenticated") {
+    } else if (status === "authenticated" || isLocal) {
       const keyQuery = selectedKey ? `&keyId=${selectedKey}` : "";
       // The initial /api/analytics fetch is now handled by useSWR
       // below, which keeps the response in a shared cache so that
@@ -365,7 +367,7 @@ export default function Dashboard() {
     }
   }, [status, page, daysFilter, selectedKey]);
 
-  if (status === "loading" || status === "unauthenticated") {
+  if (status === "loading" || (status === "unauthenticated" && !isLocal)) {
     return <div className="min-h-screen flex items-center justify-center bg-[#050505] text-white">Loading...</div>;
   }
 

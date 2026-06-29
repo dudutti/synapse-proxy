@@ -2,7 +2,7 @@
 
 import { useSession } from "next-auth/react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { useEffect, useState, useRef } from "react";
+import { useEffect, useState, useRef, Suspense } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { ArrowLeft, Send, Sparkles, Activity, Zap, Database, X, Link2, Unlink, Download, BarChart3 } from "lucide-react";
@@ -318,7 +318,7 @@ const ChatBubble = ({ msg, isControl }: { msg: ChatMsg; isControl: boolean }) =>
   );
 };
 
-export default function PlaygroundPage() {
+function PlaygroundPageContent() {
   const { status } = useSession();
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -344,10 +344,12 @@ export default function PlaygroundPage() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const isLocal = typeof window !== 'undefined' && (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+
   useEffect(() => {
-    if (status === "unauthenticated") {
+    if (status === "unauthenticated" && !isLocal) {
       router.push("/login");
-    } else if (status === "authenticated") {
+    } else if (status === "authenticated" || isLocal) {
       fetch("/api/keys")
         .then((res) => res.json())
         .then((data) => {
@@ -920,5 +922,13 @@ export default function PlaygroundPage() {
         </p>
       </footer>
     </div>
+  );
+}
+
+export default function PlaygroundPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">Loading Playground...</div>}>
+      <PlaygroundPageContent />
+    </Suspense>
   );
 }

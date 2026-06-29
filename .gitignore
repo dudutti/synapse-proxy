@@ -105,6 +105,25 @@ cookies.txt
 dashboard/cookies.txt
 recap_evolution_plan.md
 RECAP_PLAN.md
+proxy/*.exe
 proxy/.gocache/
 proxy/models/
-proxy/*.exe
+
+# Private developer files & workspace logs
+headroom/
+walkthrough01.md
+task.md
+implementation_plan.md
+deploy-dashboard.js
+check-prod.js
+run-diag.js
+run-dump.js
+run-logs.js
+get-prod-logs.js
+verify-prod-final.js
+verify-prod.js
+get-logs.js
+dump-payload.js
+deploy-perf.ps1
+0001-feat-dashboard-Reorganize-dashboard-to-migrate-admin.patch
+launch_posts.md

@@ -23,11 +23,13 @@ func StartDashboardServer(port string, listModelsHandler http.HandlerFunc) {
 
 	// Global HTTP handler on DefaultServeMux
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/favicon.ico" {
+			r.URL.Path = "/icon.png"
+		}
+
 		// Bypass API routes from frontend serving
 		if strings.HasPrefix(r.URL.Path, "/api/") || strings.HasPrefix(r.URL.Path, "/v1/") {
-			if r.URL.Path == "/api/models" {
-				listModelsHandler(w, r)
-			}
+			http.NotFound(w, r)
 			return
 		}
 

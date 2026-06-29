@@ -4,7 +4,7 @@ import { useSession } from "next-auth/react";
 
 import { useRouter } from "next/navigation";
 
-import { useEffect, useState } from "react";
+import { useEffect, useState, Suspense } from "react";
 
 import Link from "next/link";
 
@@ -67,7 +67,7 @@ interface ApiKey {
 
 }
 
-export default function SettingsPage() {
+function SettingsPageContent() {
 
   const { data: session, status } = useSession();
 
@@ -110,6 +110,35 @@ export default function SettingsPage() {
   const [newDefaultModel, setNewDefaultModel] = useState("");
 
   const [newIsolateCache, setNewIsolateCache] = useState(false);
+
+  const [licenseKeyInput, setLicenseKeyInput] = useState("");
+  const [isActivatingLicense, setIsActivatingLicense] = useState(false);
+
+  const activateLicense = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!licenseKeyInput.trim()) return;
+    setIsActivatingLicense(true);
+    const tId = toast.loading("Activating license key...");
+    try {
+      const res = await fetch("/api/license/activate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ key: licenseKeyInput.trim() }),
+      });
+      if (res.ok) {
+        toast.success("License activated successfully!", { id: tId });
+        setLicenseKeyInput("");
+        fetchProfileAndPlans();
+      } else {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Invalid license key");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to activate license", { id: tId });
+    } finally {
+      setIsActivatingLicense(false);
+    }
+  };
 
   const searchParams = useSearchParams();
 
@@ -252,13 +281,21 @@ export default function SettingsPage() {
 
   }, [newProvider, newRealKey]);
 
+  const [isLocal, setIsLocal] = useState(false);
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setIsLocal(window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1');
+    }
+  }, []);
+
   useEffect(() => {
 
-    if (status === "unauthenticated") {
+    if (status === "unauthenticated" && !isLocal) {
 
       router.push("/login");
 
-    } else if (status === "authenticated") {
+    } else if (status === "authenticated" || isLocal) {
 
       fetchKeys();
       fetchProfileAndPlans();
@@ -913,6 +950,104 @@ export default function SettingsPage() {
         </motion.header>
 
         <motion.main variants={itemVars} className="grid gap-8">
+
+          {isLocal && (
+            <section className="bg-[#0f0f11]/80 p-8 rounded-3xl border border-emerald-500/20 backdrop-blur-xl shadow-2xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/5 rounded-full blur-[80px] pointer-events-none" />
+              <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 relative z-10">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 bg-emerald-500/10 rounded-xl border border-emerald-500/20 text-emerald-400">
+                    <Activity className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                      Local Client License
+                      <span className="text-[10px] bg-emerald-500/20 text-emerald-400 px-2 py-0.5 rounded-full border border-emerald-500/30 uppercase font-black tracking-widest">
+                        {userProfile?.tier || "FREE"}
+                      </span>
+                    </h2>
+                    <p className="text-gray-400 text-xs mt-1">
+                      {userProfile?.tier === "FREE" 
+                        ? "Hobby Tier: 10M tokens monthly compression quota limit." 
+                        : userProfile?.tier === "PRO" 
+                        ? "Pro Tier: 50M tokens monthly compression quota limit." 
+                        : "Enterprise Tier: Unlimited monthly tokens compression."}
+                    </p>
+                  </div>
+                </div>
+
+                <form onSubmit={activateLicense} className="flex gap-2 w-full md:w-auto shrink-0">
+                  <input
+                    type="text"
+                    value={licenseKeyInput}
+                    onChange={(e) => setLicenseKeyInput(e.target.value)}
+                    placeholder="Enter license key (PRO-xxx, ENT-xxx)"
+                    className="bg-black/60 border border-white/10 rounded-xl px-4 py-2.5 text-xs text-white focus:outline-none focus:border-emerald-500 transition w-full md:w-64 font-mono"
+                    required
+                  />
+                  <button
+                    type="submit"
+                    disabled={isActivatingLicense}
+                    className="bg-emerald-500 hover:bg-emerald-400 disabled:bg-emerald-800 text-black font-bold text-xs px-5 py-2.5 rounded-xl transition shrink-0"
+                  >
+                    Activate
+                  </button>
+                </form>
+              </div>
+
+              {userProfile && userProfile.tier !== "ENTERPRISE" && (
+                <div className="mt-6 border-t border-white/5 pt-6 relative z-10">
+                  <div className="flex justify-between text-xs text-gray-400 mb-2 font-mono">
+                    <span>Quota consumption</span>
+                    <span>
+                      {userProfile.currentMonthTokens.toLocaleString()} / {(userProfile.tier === "FREE" ? 10000000 : 50000000).toLocaleString()} tokens saved
+                    </span>
+                  </div>
+                  <div className="w-full bg-white/5 h-2 rounded-full overflow-hidden border border-white/10">
+                    <div
+                      className="bg-gradient-to-r from-emerald-500 to-teal-400 h-full rounded-full transition-all duration-500"
+                      style={{
+                        width: `${Math.min(100, (userProfile.currentMonthTokens / (userProfile.tier === "FREE" ? 10000000 : 50000000)) * 100)}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
+          {!isLocal && (
+            <section className="bg-white/5 p-8 rounded-3xl border border-white/10 backdrop-blur-xl shadow-2xl relative overflow-hidden">
+              <div className="absolute top-0 right-0 w-64 h-64 bg-emerald-500/10 rounded-full blur-[80px] pointer-events-none" />
+              <div className="flex items-center gap-3 mb-6 relative z-10">
+                <div className="p-2 bg-emerald-500/20 rounded-lg border border-emerald-500/30 text-emerald-400">
+                  <Activity className="w-5 h-5 animate-pulse" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-white">Local Daemon Activation Key</h2>
+                  <p className="text-gray-400 text-sm">
+                    Copy this key and paste it in your local client's settings to link your tier and sync quotas.
+                  </p>
+                </div>
+              </div>
+              <div className="flex flex-col sm:flex-row items-center gap-4 relative z-10 bg-black/40 border border-white/10 p-4 rounded-2xl">
+                <code className="text-xs text-emerald-400 font-mono select-all break-all flex-1 text-center sm:text-left">
+                  {userProfile ? `SYNAPSE-${userProfile.id}` : "Loading activation key..."}
+                </code>
+                <button
+                  onClick={() => {
+                    if (userProfile) {
+                      navigator.clipboard.writeText(`SYNAPSE-${userProfile.id}`);
+                      toast.success("License key copied to clipboard!");
+                    }
+                  }}
+                  className="bg-white/10 hover:bg-white/20 text-white font-bold text-xs px-5 py-2.5 rounded-xl transition w-full sm:w-auto text-center shrink-0 border border-white/5 hover:border-white/10"
+                >
+                  Copy Key
+                </button>
+              </div>
+            </section>
+          )}
 
           {/* Create Key Section */}
 
@@ -1835,4 +1970,12 @@ ${showSnippetModal}`}
 
   );
 
+}
+
+export default function SettingsPage() {
+  return (
+    <Suspense fallback={<div className="min-h-screen bg-[#050505] text-white flex items-center justify-center">Loading Settings...</div>}>
+      <SettingsPageContent />
+    </Suspense>
+  );
 }

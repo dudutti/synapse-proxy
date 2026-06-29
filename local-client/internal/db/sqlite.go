@@ -66,6 +66,15 @@ func InitDB() error {
 		expires_at DATETIME,
 		verified_at DATETIME
 	);
+
+	CREATE TABLE IF NOT EXISTS virtual_keys (
+		id TEXT PRIMARY KEY,
+		virtual_key TEXT UNIQUE,
+		provider TEXT,
+		real_key TEXT,
+		default_model TEXT,
+		created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 
 	_, err = db.Exec(schema)
@@ -81,6 +90,16 @@ func InitDB() error {
 			INSERT INTO license_info (license_key, tier, quota_limit, quota_used, expires_at, verified_at)
 			VALUES ('FREE-TRIAL-KEY', 'FREE', 10000000, 0, ?, ?)
 		`, time.Now().AddDate(1, 0, 0), time.Now())
+	}
+
+	// Insert default virtual key if table is empty
+	var keysCount int
+	err = db.QueryRow("SELECT COUNT(*) FROM virtual_keys").Scan(&keysCount)
+	if err == nil && keysCount == 0 {
+		_, _ = db.Exec(`
+			INSERT INTO virtual_keys (id, virtual_key, provider, real_key, default_model)
+			VALUES ('local-key-id', 'sk-opti-local-key', 'ollama', 'http://localhost:11434', '')
+		`)
 	}
 
 	DB = db

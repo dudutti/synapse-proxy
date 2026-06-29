@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { RequestExplorer } from "@/components/RequestExplorer";
 
 export const metadata = {
@@ -23,7 +24,9 @@ export default function ExplorerPage() {
             ← Back to dashboard
           </a>
         </header>
-        <RequestExplorer />
+        <Suspense fallback={<div className="text-zinc-500 text-xs">Loading Explorer...</div>}>
+          <RequestExplorer />
+        </Suspense>
       </div>
     </div>
   );
