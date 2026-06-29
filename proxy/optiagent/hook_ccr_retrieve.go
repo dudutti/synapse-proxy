@@ -50,6 +50,7 @@ import (
 	"time"
 
 	"synapse-proxy/internal/metrics"
+	"synapse-proxy/internal/utils"
 )
 
 // CCRRetrieveTTL is how long a CCR response stays in Redis.
@@ -122,6 +123,12 @@ func (h *CCRRetrieveHook) BeforeRequest(ctx context.Context, hctx *HookContext) 
 		return nil, nil
 	}
 	if len(body) == 0 {
+		return nil, nil
+	}
+
+	if utils.IsCachedResponseAnError(body) {
+		log.Printf("[%s] Cached response looks like an error, invalidating and falling through key=%s vk=%s", h.Name(), key, hctx.VK)
+		_ = backend.Del(ctx, key)
 		return nil, nil
 	}
 

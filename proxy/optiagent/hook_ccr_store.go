@@ -28,6 +28,7 @@ import (
 	"log"
 
 	"synapse-proxy/internal/metrics"
+	"synapse-proxy/internal/utils"
 )
 
 // CCRStoreHook writes the upstream response to Redis under
@@ -74,7 +75,7 @@ func (h *CCRStoreHook) AfterResponse(ctx context.Context, hctx *HookContext) ([]
 	if hctx.UpstreamStatus != 200 {
 		return nil, nil
 	}
-	if len(hctx.UpstreamResponse) == 0 {
+	if len(hctx.UpstreamResponse) == 0 || utils.IsCachedResponseAnError(hctx.UpstreamResponse) {
 		return nil, nil
 	}
 
