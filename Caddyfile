@@ -1,0 +1,20 @@
+synapse-proxy.com, www.synapse-proxy.com {
+    encode zstd gzip
+
+    # Route /v1/* to the Go proxy
+    @proxy path /v1/*
+    handle @proxy {
+        reverse_proxy optitoken-proxy:8080
+    }
+
+    # Route everything else to the dashboard
+    handle {
+        reverse_proxy optitoken-dashboard:3000
+    }
+
+    header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+}
+
+http://synapse-proxy.com {
+    redir https://www.synapse-proxy.com{uri} permanent
+}
