@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import ParticleBackground from "@/components/ParticleBackground";
 import TelemetryGlobe from "@/components/TelemetryGlobe";
 import { LineChart, Line, PieChart, Pie, Cell, XAxis, Tooltip, ResponsiveContainer } from "recharts";
-import HeaderNav from "@/components/HeaderNav";
+import PublicHeader from "@/components/PublicHeader";
 
 function LoginContent() {
   const [email, setEmail] = useState("");
@@ -157,21 +157,7 @@ function LoginContent() {
     <div className="min-h-screen lg:grid lg:grid-cols-2 bg-[#050505] text-white font-sans relative overflow-hidden pt-20">
       <ParticleBackground />
       
-      {/* Floating Header Navbar */}
-      <header className="absolute top-0 inset-x-0 h-20 border-b border-white/5 bg-[#050505]/40 backdrop-blur-md flex items-center justify-between px-8 z-50">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-[#0f0f11] border border-white/10 ring-1 ring-emerald-500/20 overflow-hidden flex items-center justify-center">
-            <img src="/logo01.png" alt="Synapse Proxy Icon" className="w-[150%] h-[150%] object-cover max-w-none translate-y-1" />
-          </div>
-          <span className="font-bold tracking-tight text-white">Synapse Proxy</span>
-        </div>
-        
-        <HeaderNav />
-        
-        <div className="text-xs text-gray-500 font-bold">
-          v1.1.0
-        </div>
-      </header>
+      <PublicHeader lang={lang} showVersion={true} />
       
       {/* MASSIVE WATERMARK LOGO */}
       <div className="absolute inset-0 lg:w-1/2 pointer-events-none opacity-[0.15] z-0 flex items-center justify-center overflow-hidden">

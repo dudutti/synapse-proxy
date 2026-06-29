@@ -3,7 +3,7 @@ import Link from "next/link";
 import { ArrowRight, Calendar, User } from "lucide-react";
 import { cookies } from "next/headers";
 import type { Metadata } from "next";
-import HeaderNav from "@/components/HeaderNav";
+import PublicHeader from "@/components/PublicHeader";
 import Footer from "@/components/Footer";
 import BlogFilters from "@/components/blog/BlogFilters";
 import BlogPagination from "@/components/blog/BlogPagination";
@@ -82,22 +82,7 @@ export default async function BlogIndexPage({ searchParams }: { searchParams: { 
         <img src="/logo01.png" alt="Watermark" className="w-[150%] h-[150%] object-cover drop-shadow-[0_0_100px_rgba(52,211,153,0.8)] opacity-50" />
       </div>
 
-      <div className="fixed top-0 left-0 right-0 z-50 p-4 pointer-events-none">
-        <div className="max-w-7xl mx-auto pointer-events-auto">
-          <header className="flex justify-between items-center bg-[#050505]/80 border border-white/10 p-4 rounded-2xl backdrop-blur-xl shadow-2xl relative z-50">
-            <Link href="/" className="flex items-center gap-3 group">
-              <div className="w-10 h-10 rounded-xl bg-[#0f0f11] border border-white/10 shadow-[0_0_20px_rgba(52,211,153,0.2)] group-hover:shadow-[0_0_30px_rgba(52,211,153,0.4)] ring-1 ring-emerald-500/30 overflow-hidden flex items-center justify-center transition-all">
-                <img src="/logo01.png" alt="Synapse Proxy Icon" className="w-[150%] h-[150%] object-cover max-w-none translate-y-1.5" />
-              </div>
-              <div>
-                <h1 className="text-xl font-bold tracking-tight text-white group-hover:text-emerald-400 transition-colors">Synapse Proxy</h1>
-                <p className="text-gray-500 text-xs hidden sm:block">Intelligent LLM Gateway</p>
-              </div>
-            </Link>
-            <HeaderNav />
-          </header>
-        </div>
-      </div>
+      <PublicHeader lang={lang as "fr" | "en"} />
 
       <div className="flex-1 max-w-6xl mx-auto px-4 sm:px-6 lg:px-8 pt-16">
         

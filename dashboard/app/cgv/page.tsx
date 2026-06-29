@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
-import HeaderNav from "@/components/HeaderNav";
+import PublicHeader from "@/components/PublicHeader";
 import Footer from "@/components/Footer";
 import { cookies } from "next/headers";
 import ParticleBackground from "@/components/ParticleBackground";
@@ -36,20 +36,7 @@ export default async function CGVPage() {
       <div className="absolute bottom-[-10%] right-[-10%] w-[50%] h-[50%] bg-cyan-500/10 rounded-full blur-[120px] pointer-events-none" />
 
       <div className="max-w-4xl mx-auto relative z-10">
-        <header className="w-full border border-white/10 bg-[#050505]/40 backdrop-blur-md flex items-center justify-between py-4 px-8 z-50 mb-12 rounded-2xl">
-          <Link href="/" className="flex items-center gap-3 hover:opacity-80 transition-opacity">
-            <div className="w-8 h-8 rounded-full bg-[#0f0f11] border border-white/10 ring-1 ring-emerald-500/20 overflow-hidden flex items-center justify-center">
-              <img src="/logo01.png" alt="Synapse Proxy Icon" className="w-[150%] h-[150%] object-cover max-w-none translate-y-1" />
-            </div>
-            <span className="font-bold tracking-tight text-white">Synapse Proxy</span>
-          </Link>
-          <HeaderNav />
-          <div className="flex items-center gap-3">
-            <Link href="/" className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 transition-all text-xs font-bold text-black shadow-[0_0_15px_rgba(16,185,129,0.2)]">
-              {t.dashboardBtn}
-            </Link>
-          </div>
-        </header>
+        <PublicHeader lang={lang} floating={false} />
 
         <div className="mb-16">
           <div className="inline-block px-3 py-1 rounded-full bg-white/5 border border-white/10 text-xs font-bold text-gray-400 uppercase tracking-wider mb-6">

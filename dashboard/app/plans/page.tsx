@@ -1,8 +1,8 @@
 import { cookies } from "next/headers";
 import Link from "next/link";
 import { Check, ArrowRight } from "lucide-react";
+import PublicHeader from "@/components/PublicHeader";
 import ParticleBackground from "@/components/ParticleBackground";
-import HeaderNav from "@/components/HeaderNav";
 import { prisma } from "@/lib/prisma";
 import { translations, TranslationItem, Language } from "@/lib/translations";
 
@@ -33,17 +33,7 @@ export default async function PricingPage() {
     <div className="min-h-screen bg-[#050505] text-white font-sans relative overflow-hidden pt-20">
       <ParticleBackground />
       
-      {/* Floating Header Navbar */}
-      <header className="absolute top-0 inset-x-0 h-20 border-b border-white/5 bg-[#050505]/40 backdrop-blur-md flex items-center justify-between px-8 z-50">
-        <div className="flex items-center gap-3">
-          <div className="w-8 h-8 rounded-full bg-[#0f0f11] border border-white/10 ring-1 ring-emerald-500/20 overflow-hidden flex items-center justify-center">
-            <img src="/logo01.png" alt="Synapse Proxy Icon" className="w-[150%] h-[150%] object-cover max-w-none translate-y-1" />
-          </div>
-          <Link href="/" className="font-bold tracking-tight text-white">Synapse Proxy</Link>
-        </div>
-        
-        <HeaderNav />
-      </header>
+      <PublicHeader lang={lang} />
 
       <div className="relative z-10 max-w-6xl mx-auto px-6 pt-20 pb-24">
         <div className="text-center mb-16">
