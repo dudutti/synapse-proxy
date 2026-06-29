@@ -74,6 +74,15 @@
   * À chaque nouvelle requête reçue en SSE, une onde lumineuse séquentielle anime les cartes en affichant l'état de passage (Vert = Hit, Rouge = Miss, Violet = Compresseur activé).
   * Connexion de la vue d'ensemble des statistiques de la page d'administration au flux temps réel (`/api/admin/logs/stream`). Les compteurs de requêtes et d'économies de tokens/argent grimpent en direct.
 
+### Phase 11 : Polish UX - Sélecteur de Clé Global & Unification des Headers
+* **Sélecteur de Clé Virtuelle Global (page.tsx)** :
+  * Intégration d'un filtre global sous forme de sélecteur épuré en haut de la section statistique.
+  * Permet de filtrer en temps réel l'intégralité des indicateurs de la page utilisateur (Jauges, Graphique de valeur sauvée, Taux de compression) par clé virtuelle spécifique ou de visualiser la consommation cumulée du compte.
+* **Unification des Headers Publics (PublicHeader.tsx & 17 pages associées)** :
+  * Extraction et centralisation de la barre de navigation dans un composant réutilisable unique `PublicHeader.tsx`.
+  * Support d'un mode `floating` fixe avec effet de flou pour les pages d'accueil, blog et plans, et d'un mode statique s'intégrant au flux pour les pages détaillées de fonctionnalités.
+  * Suppression de près de 300 lignes de code CSS/HTML dupliquées pour une cohérence graphique parfaite.
+
 ## Galerie de Capture d'Écran (Walkthrough de Production)
 
 Pour votre documentation d'onboarding et de présentation, vous trouverez ci-dessous une galerie interactive de toutes les sections de l'application de production. 
