@@ -557,7 +557,7 @@ export default function Dashboard() {
         </motion.header>
 
         <motion.div variants={itemVars} className="mb-6">
-          <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center justify-between mb-4 flex-wrap gap-4">
             <div>
               <h2 className="text-cyan-400 text-xs font-black tracking-[0.25em] uppercase drop-shadow-[0_0_8px_rgba(34,211,238,0.5)]">
                 Live Telemetry
@@ -565,6 +565,20 @@ export default function Dashboard() {
               <p className="text-zinc-500 text-xs mt-1">
                 Streaming every 5s {"\u00b7"} user aggregates
               </p>
+            </div>
+            
+            <div className="flex items-center gap-2 bg-black/60 border border-white/10 rounded-xl px-3 py-1.5 backdrop-blur-xl">
+              <span className="text-[10px] uppercase font-black tracking-wider text-zinc-500">Filter Key:</span>
+              <select 
+                className="bg-transparent text-zinc-300 text-xs font-bold outline-none cursor-pointer hover:text-white"
+                value={selectedKey}
+                onChange={(e) => { setSelectedKey(e.target.value); setPage(1); }}
+              >
+                <option value="" className="bg-black text-white">All Keys (Combined)</option>
+                {apiKeys.map(k => (
+                  <option key={k.id} value={k.id} className="bg-black text-white">{k.virtualKey}</option>
+                ))}
+              </select>
             </div>
           </div>
           <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-3">
