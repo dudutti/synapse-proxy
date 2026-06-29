@@ -194,6 +194,21 @@ export default function SettingsPage() {
       setLoadingModels(true);
 
       try {
+        if (newProvider === "ollama" || newProvider === "lmstudio") {
+          const res = await fetch(`/api/models?provider=${newProvider}&url=${encodeURIComponent(newRealKey)}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (Array.isArray(data)) {
+              setAvailableModels(data.map((name: string) => ({ id: name, name: name })));
+            } else {
+              setAvailableModels([]);
+            }
+          } else {
+            setAvailableModels([]);
+          }
+          setLoadingModels(false);
+          return;
+        }
 
         const res = await fetch("/api/models", {
 
@@ -941,7 +956,17 @@ export default function SettingsPage() {
 
                     value={newProvider}
 
-                    onChange={(e) => setNewProvider(e.target.value)}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setNewProvider(val);
+                      if (val === "ollama") {
+                        setNewRealKey("http://localhost:11434");
+                      } else if (val === "lmstudio") {
+                        setNewRealKey("http://localhost:1234");
+                      } else {
+                        setNewRealKey("");
+                      }
+                    }}
 
                     className="w-full p-4 bg-[#0a0a0a] border border-white/10 rounded-xl focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500/50 focus:outline-none text-white appearance-none transition-all"
 
@@ -962,6 +987,10 @@ export default function SettingsPage() {
                     <option value="minimax">Minimax</option>
 
                     <option value="groq">Groq</option>
+
+                    <option value="ollama">Ollama (Local)</option>
+
+                    <option value="lmstudio">LM Studio (Local)</option>
 
                     <option value="custom">Custom Endpoint</option>
 
@@ -1700,7 +1729,7 @@ export default function SettingsPage() {
 
 client = OpenAI(
 
-  base_url="${process.env.NEXT_PUBLIC_PROXY_URL || 'https://synapse-proxy.com'}/v1",
+  base_url="${process.env.NEXT_PUBLIC_PROXY_URL || 'http://localhost:8080'}/v1",
 
   api_key="${showSnippetModal}"
 
@@ -1715,6 +1744,39 @@ response = client.chat.completions.create(
 )
 
 print(response.choices[0].message.content)`}
+
+                </pre>
+
+              </div>
+
+              <div>
+
+                <h3 className="text-sm font-bold text-gray-300 mb-2 uppercase tracking-wide">Claude Code</h3>
+
+                <pre className="bg-black border border-white/10 p-4 rounded-xl text-xs font-mono text-amber-400 overflow-x-auto">
+
+{`# Configure Claude Code to use Synapse Proxy (port 8080 local)
+export CLAUDE_BASE_URL="${process.env.NEXT_PUBLIC_PROXY_URL || 'http://localhost:8080'}/v1"
+export ANTHROPIC_API_KEY="${showSnippetModal}"
+
+# Run Claude Code normally!
+claude`}
+
+                </pre>
+
+              </div>
+
+              <div>
+
+                <h3 className="text-sm font-bold text-gray-300 mb-2 uppercase tracking-wide">Cursor / VS Code</h3>
+
+                <pre className="bg-black border border-white/10 p-4 rounded-xl text-xs font-mono text-cyan-300 overflow-x-auto">
+
+{`Settings -> Models -> OpenAI or Anthropic -> Override URL:
+${process.env.NEXT_PUBLIC_PROXY_URL || 'http://localhost:8080'}/v1
+
+API Key:
+${showSnippetModal}`}
 
                 </pre>
 

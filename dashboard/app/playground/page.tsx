@@ -44,6 +44,9 @@ function useAvailableModels(virtualKey: string, keys: ApiKey[]) {
   const [models, setModels] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
 
+  const selectedKeyObj = keys.find((k) => k.virtualKey === virtualKey);
+  const provider = selectedKeyObj ? selectedKeyObj.provider.toLowerCase() : "";
+
   useEffect(() => {
     if (!virtualKey) {
       setModels([]);
@@ -51,6 +54,28 @@ function useAvailableModels(virtualKey: string, keys: ApiKey[]) {
     }
     let cancelled = false;
     setLoading(true);
+
+    if (provider === "ollama" || provider === "lmstudio") {
+      fetch(`/api/models?provider=${provider}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (cancelled) return;
+          setLoading(false);
+          if (Array.isArray(data)) {
+            const mapped = data.map((name: string) => ({ id: name, name: name }));
+            setModels(mapped);
+          } else {
+            setModels([]);
+          }
+        })
+        .catch(() => {
+          if (cancelled) return;
+          setLoading(false);
+          setModels([]);
+        });
+      return;
+    }
+
     fetch("/api/models", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -74,7 +99,7 @@ function useAvailableModels(virtualKey: string, keys: ApiKey[]) {
     return () => {
       cancelled = true;
     };
-  }, [virtualKey]);
+  }, [virtualKey, provider]);
 
   const fallbackModel = virtualKey
     ? keys.find((k) => k.virtualKey === virtualKey)?.defaultModel || ""
