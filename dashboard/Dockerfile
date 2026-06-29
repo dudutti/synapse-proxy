@@ -11,6 +11,9 @@ COPY . .
 
 # Generate Prisma client and Build Next.js
 RUN npx prisma generate
+# Remove static export mode — production runs as a Next.js server (SSR),
+# output:'export' is only used by the local-client static build script.
+RUN sed -i "/output: 'export'/d" next.config.mjs
 RUN npm run build
 
 # Expose port
