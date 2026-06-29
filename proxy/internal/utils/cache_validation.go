@@ -20,6 +20,9 @@ func IsCachedResponseAnError(body []byte) bool {
 	if len(body) == 0 {
 		return true
 	}
+	if !json.Valid(body) {
+		return true
+	}
 	// Fast path: look for the literal error markers without a full unmarshal
 	if bytes.Contains(body, []byte(`"error":`)) {
 		// Distinguish from a body that mentions "error" in a normal field

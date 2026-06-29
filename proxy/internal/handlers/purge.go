@@ -1,4 +1,4 @@
-﻿package handlers
+package handlers
 
 import (
 	"context"
@@ -36,23 +36,27 @@ func CachePurgeHandler(w http.ResponseWriter, r *http.Request) {
 	// Optional: purge only for a specific virtual key.
 	vk := r.URL.Query().Get("vk")
 
-	var l1Pattern, l2Pattern string
+	var l1Pattern, l2Pattern, loopPattern string
 	if vk != "" {
 		l1Pattern = "synapse:l1cache:" + vk + ":*"
 		l2Pattern = "synapse:l2cache:" + vk + ":*"
+		loopPattern = "synapse:loops:" + vk + ":*"
 	} else {
 		l1Pattern = "synapse:l1cache:*"
 		l2Pattern = "synapse:l2cache:*"
+		loopPattern = "synapse:loops:*"
 	}
 
 	deleted += scanAndUnlink(ctx, rdb, l1Pattern, "L1")
 	deleted += scanAndUnlink(ctx, rdb, l2Pattern, "L2")
+	deleted += scanAndUnlink(ctx, rdb, loopPattern, "Loops")
+	deleted += scanAndUnlink(ctx, rdb, "ccr:*", "CCR")
 
 	log.Printf("Cache purged: %d keys deleted (vk=%s)", deleted, vk)
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"deleted": deleted,
-		"message": fmt.Sprintf("Purged %d cache entries (L1 + L2)", deleted),
+		"message": fmt.Sprintf("Purged %d cache entries (L1 + L2 + Loops + CCR)", deleted),
 	})
 }
 
