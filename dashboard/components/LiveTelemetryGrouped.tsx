@@ -161,7 +161,7 @@ function buildGroups(records: LiveRequest[], by: GroupBy): Group[] {
   return Array.from(map.entries())
     .map(([key, recs]) => {
       const tokensSaved = recs.reduce((s, r) => s + r.savedInput + r.savedOutput, 0);
-      const hits = recs.filter((r) => r.type.startsWith("Cache Hit")).length;
+      const hits = recs.filter((r) => r.type?.startsWith("Cache Hit")).length;
       const first = recs[0];
       return {
         key,
@@ -345,7 +345,7 @@ export function LiveTelemetryGrouped({ records, initialGroupBy = "agent", onSnap
     const recs = snap.requests;
     snap.cacheHitRate = recs.length
       ? Math.round(
-          (recs.filter((r) => r.type.startsWith("Cache Hit")).length /
+          (recs.filter((r) => r.type?.startsWith("Cache Hit")).length /
             recs.length) *
             100
         )
@@ -399,7 +399,7 @@ export function LiveTelemetryGrouped({ records, initialGroupBy = "agent", onSnap
     snap.totalCostSaved = estimateCostSaved(snap.totalTokensSaved);
     const recs = snap.requests;
     snap.cacheHitRate = recs.length
-      ? Math.round((recs.filter((r) => r.type.startsWith("Cache Hit")).length / recs.length) * 100)
+      ? Math.round((recs.filter((r) => r.type?.startsWith("Cache Hit")).length / recs.length) * 100)
       : 0;
     setRecording(null);
     setSnapshotModal(snap);
@@ -828,15 +828,15 @@ function GroupBody({ records, onDiff }: { records: LiveRequest[]; onDiff: (r: Li
               <td className="px-4 py-1.5">
                 <span
                   className={`rounded px-2 py-0.5 text-xs font-bold border ${
-                    r.type === getCacheLabel("L0").label || r.type.startsWith("L0")
+                    r.type === getCacheLabel("L0").label || r.type?.startsWith("L0")
                       ? "bg-cyan-500/20 text-cyan-300 border-cyan-500/30"
-                      : r.type === getCacheLabel("L1").label || r.type.startsWith("L1")
+                      : r.type === getCacheLabel("L1").label || r.type?.startsWith("L1")
                       ? "bg-blue-500/20 text-blue-300 border-blue-500/30"
-                      : r.type === "L2 Cache (semantic)" || r.type.startsWith("L2")
+                      : r.type === "L2 Cache (semantic)" || r.type?.startsWith("L2")
                       ? "bg-emerald-500/20 text-emerald-300 border-emerald-500/30"
-                      : r.type === getCacheLabel("L3").label || r.type.startsWith("L3")
+                      : r.type === getCacheLabel("L3").label || r.type?.startsWith("L3")
                       ? "bg-purple-500/20 text-purple-300 border-purple-500/30"
-                      : r.type === getCacheLabel("LOOP").label || r.type.startsWith("LOOP")
+                      : r.type === getCacheLabel("LOOP").label || r.type?.startsWith("LOOP")
                       ? "bg-amber-500/20 text-amber-300 border-amber-500/30"
                       : "bg-zinc-700/40 text-zinc-300 border-white/5"
                   }`}
