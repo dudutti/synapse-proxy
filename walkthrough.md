@@ -83,6 +83,22 @@
   * Support d'un mode `floating` fixe avec effet de flou pour les pages d'accueil, blog et plans, et d'un mode statique s'intégrant au flux pour les pages détaillées de fonctionnalités.
   * Suppression de près de 300 lignes de code CSS/HTML dupliquées pour une cohérence graphique parfaite.
 
+### Phase 12 : Sandbox Client Local Windows (`.exe` autonome)
+* **Création d'un Sous-Dossier Isolé (`local-client/`)** :
+  * Initialisation d'un module Go séparé (`synapse-local`) pour préserver la structure principale intacte.
+* **Moteur SQLite & Caching Hybride** :
+  * Intégration d'un pilote SQLite sans CGO (`github.com/glebarez/go-sqlite`) pour une compilation multiplateforme facile.
+  * Implémentation de caches L1 (requêtes exactes), L2 (Jaccard sémantique de mots-clés local) et L3 (simulé) sur SQLite.
+* **DRM de Licence & Quotas** :
+  * Système de décodage local de licences par préfixes (`FREE-`, `PRO-`, `ENT-`).
+  * Background worker effectuant un heartbeat toutes les 10 minutes pour synchroniser les quotas consommés avec l'API cloud.
+* **Dashboard Statique Embarqué** :
+  * Configuration du serveur d'assets via `go:embed` pour servir le dashboard Next.js sur le port unique **`4321`** et le proxy de routage sur le port **`8080`**.
+* **Intégration d'Ollama & LM Studio avec Liste de Modèles Dynamique** :
+  * Ajout de profils pré-remplis pour Ollama (`http://localhost:11434`) et LM Studio (`http://localhost:1234`).
+  * Récupération automatique de la liste des modèles locaux installés via l'interrogation dynamique de leurs API locales.
+  * Ajout de guides visuels et d'exemples d'intégration pour **Claude Code** et **Cursor** dans l'onboarding.
+
 ## Galerie de Capture d'Écran (Walkthrough de Production)
 
 Pour votre documentation d'onboarding et de présentation, vous trouverez ci-dessous une galerie interactive de toutes les sections de l'application de production. 

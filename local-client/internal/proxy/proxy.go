@@ -294,6 +294,19 @@ func HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	recordLog("NONE", chatReq.Model, provider, origTokens, chatResp.Usage.CompletionTokens, optTokens, chatResp.Usage.CompletionTokens, duration, costSaved)
 }
 
+func getCacheType(lvl string) string {
+	switch lvl {
+	case "L1":
+		return "Cache Hit (L1)"
+	case "L2":
+		return "L2 Cache (semantic)"
+	case "L3":
+		return "Cache Hit (L3)"
+	default:
+		return "Cache Miss"
+	}
+}
+
 func recordLog(level, model, provider string, tokensIn, tokensOut, tokensInOpt, tokensOutOpt int, duration int64, cost float64) {
 	id := generateID()
 	_, _ = db.DB.Exec(`
@@ -305,6 +318,7 @@ func recordLog(level, model, provider string, tokensIn, tokensOut, tokensInOpt, 
 	select {
 	case LogBroadcastChan <- map[string]interface{}{
 		"id":             id,
+		"type":           getCacheType(level),
 		"cacheLevel":     level,
 		"model":          model,
 		"provider":       provider,
@@ -526,6 +540,7 @@ func HandleAnalyticsRoute(w http.ResponseWriter, r *http.Request) {
 			if err := logRows.Scan(&id, &cacheLvl, &model, &prov, &tIn, &tOut, &tInOpt, &tOutOpt, &duration, &cSaved, &createdAt); err == nil {
 				logs = append(logs, map[string]interface{}{
 					"id":             id,
+					"type":           getCacheType(cacheLvl),
 					"cacheLevel":     cacheLvl,
 					"model":          model,
 					"provider":       prov,
