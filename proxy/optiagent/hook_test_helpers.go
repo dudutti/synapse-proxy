@@ -358,6 +358,16 @@ func (s *stubBackend) Exists(_ context.Context, key string) (bool, error) {
 	return ok, nil
 }
 
+// Del deletes a key from the stub's storedBodies and firstResponses.
+func (s *stubBackend) Del(_ context.Context, key string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.storedBodies, key)
+	delete(s.firstResponses, key)
+	s.calls = append(s.calls, stubBackendCall{Op: "del", Key: key})
+	return s.returnErr
+}
+
 // addKnownModel is a convenience for tests: marks a (provider,
 // modelID) pair as known. ModelRadarHook's SIsMember call will
 // return true for this pair.

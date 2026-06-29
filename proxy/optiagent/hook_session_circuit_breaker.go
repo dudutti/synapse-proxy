@@ -170,6 +170,9 @@ type hookRedis interface {
 	// Exists returns true if the given key has any entries (in
 	// Redis: TTL > 0). Used by ModelRadarHook.
 	Exists(ctx context.Context, key string) (bool, error)
+	// Del deletes a key from Redis. Used by CCRRetrieveHook to
+	// invalidate poisoned cache entries.
+	Del(ctx context.Context, key string) error
 }
 
 // errSessionCBBackendNil is returned when redisBackend is asked to
@@ -407,6 +410,22 @@ func (b *redisBackend) Exists(ctx context.Context, key string) (bool, error) {
 	}
 	n, err := b.rdb.Exists(ctx, key).Result()
 	return n > 0, err
+}
+
+// Del delegates to the test hook if set, otherwise to the real
+// Redis client. Used by CCRRetrieveHook to invalidate poisoned cache
+// entries.
+func (b *redisBackend) Del(ctx context.Context, key string) error {
+	if b == nil {
+		return errSessionCBBackendNil
+	}
+	if b.testHook != nil {
+		return b.testHook.Del(ctx, key)
+	}
+	if b.rdb == nil {
+		return errSessionCBBackendNil
+	}
+	return b.rdb.Del(ctx, key).Err()
 }
 
 // sessionCBBackend holds the active *redisBackend. atomic.Pointer gives
