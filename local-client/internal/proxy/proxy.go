@@ -56,6 +56,7 @@ type LMStudioModelsResponse struct {
 func StartProxyServer(proxyPort string) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/v1/chat/completions", HandleChatCompletions)
+	mux.HandleFunc("/v1/models", HandleV1Models)
 	mux.HandleFunc("/api/models", HandleListModels)
 
 	go func() {
@@ -110,6 +111,107 @@ func HandleListModels(w http.ResponseWriter, r *http.Request) {
 	}
 
 	_ = json.NewEncoder(w).Encode(list)
+}
+
+// HandleV1Models handles the standard GET /v1/models endpoint for OpenAI clients
+func HandleV1Models(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.Header().Set("Access-Control-Allow-Headers", "*")
+	w.Header().Set("Access-Control-Allow-Methods", "GET, OPTIONS")
+
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	authHeader := r.Header.Get("Authorization")
+	// If it is a virtual key, forward to the SaaS endpoint
+	if authHeader != "" && (strings.HasPrefix(authHeader, "Bearer sk-opti-") || strings.HasPrefix(authHeader, "Bearer sk-opt")) {
+		client := &http.Client{Timeout: 6 * time.Second}
+		req, err := http.NewRequest("GET", "https://synapse-proxy.com/v1/models", nil)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		req.Header.Set("Authorization", authHeader)
+		
+		resp, err := client.Do(req)
+		if err != nil {
+			http.Error(w, "SaaS server unreachable: "+err.Error(), http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+
+		for k, vv := range resp.Header {
+			for _, v := range vv {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+
+	// Otherwise, return local models from Ollama and LM Studio
+	type OpenAIModel struct {
+		ID      string `json:"id"`
+		Object  string `json:"object"`
+		Created int64  `json:"created"`
+		OwnedBy string `json:"owned_by"`
+	}
+
+	type OpenAIModelsResponse struct {
+		Object string        `json:"object"`
+		Data   []OpenAIModel `json:"data"`
+	}
+
+	var list []OpenAIModel
+	now := time.Now().Unix()
+
+	// 1. Try Ollama
+	client := &http.Client{Timeout: 1 * time.Second}
+	resp, err := client.Get("http://localhost:11434/api/tags")
+	if err == nil && resp.StatusCode == http.StatusOK {
+		var ollamaResp OllamaTagResponse
+		if err := json.NewDecoder(resp.Body).Decode(&ollamaResp); err == nil {
+			for _, m := range ollamaResp.Models {
+				list = append(list, OpenAIModel{
+					ID:      m.Name,
+					Object:  "model",
+					Created: now,
+					OwnedBy: "ollama",
+				})
+			}
+		}
+		resp.Body.Close()
+	}
+
+	// 2. Try LM Studio
+	resp, err = client.Get("http://localhost:1234/v1/models")
+	if err == nil && resp.StatusCode == http.StatusOK {
+		var lmResp LMStudioModelsResponse
+		if err := json.NewDecoder(resp.Body).Decode(&lmResp); err == nil {
+			for _, d := range lmResp.Data {
+				list = append(list, OpenAIModel{
+					ID:      d.ID,
+					Object:  "model",
+					Created: now,
+					OwnedBy: "lmstudio",
+				})
+			}
+		}
+		resp.Body.Close()
+	}
+
+	if list == nil {
+		list = []OpenAIModel{}
+	}
+
+	_ = json.NewEncoder(w).Encode(OpenAIModelsResponse{
+		Object: "list",
+		Data:   list,
+	})
 }
 
 func HandleChatCompletions(w http.ResponseWriter, r *http.Request) {

@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"synapse-proxy/internal/db"
+	"synapse-proxy/internal/services"
 	"synapse-proxy/internal/workers"
 )
 
@@ -33,11 +34,114 @@ type FetchModelsResponse struct {
 func FetchModelsHandler(w http.ResponseWriter, r *http.Request) {
 	// Enable CORS for dashboard access
 	w.Header().Set("Access-Control-Allow-Origin", "*")
-	w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
+	w.Header().Set("Access-Control-Allow-Methods", "POST, GET, OPTIONS")
 	w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
 	if r.Method == "OPTIONS" {
 		w.WriteHeader(http.StatusOK)
+		return
+	}
+
+	if r.Method == "GET" {
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Missing Authorization header"})
+			return
+		}
+
+		config, err := services.ValidateVirtualKey(r.Context(), authHeader)
+		if err != nil {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]string{"error": "Unauthorized: " + err.Error()})
+			return
+		}
+
+		provider := strings.ToLower(config.Provider)
+		realKey := config.RealKey
+
+		var models []ModelInfo
+		var fetchErr error
+
+		if provider != "" {
+			client := &http.Client{Timeout: 5 * time.Second}
+			switch provider {
+			case "openai":
+				models, fetchErr = fetchOpenAIModels(client, realKey)
+			case "anthropic":
+				models, fetchErr = fetchAnthropicModels(client, realKey)
+			case "deepseek":
+				models, fetchErr = fetchDeepseekModels(client, realKey)
+			case "mistral":
+				models, fetchErr = fetchMistralModels(client, realKey)
+			case "google":
+				models, fetchErr = fetchGoogleModels(client, realKey)
+			case "minimax":
+				models, fetchErr = fetchMinimaxModels(client, realKey)
+			case "openrouter":
+				models, fetchErr = fetchOpenRouterModels(client, realKey)
+			case "lmstudio":
+				models, fetchErr = fetchLMStudioModels(client)
+			case "moonshot":
+				models, fetchErr = fetchMoonshotModels(client, realKey)
+			}
+		}
+
+		// Fallback to static models if fetching failed or returned empty list
+		if fetchErr != nil || len(models) == 0 {
+			models = getStaticFallbackModels(provider)
+		}
+
+		// Add default model override to list if not present
+		if config.DefaultModel != "" {
+			found := false
+			for _, m := range models {
+				if m.ID == config.DefaultModel {
+					found = true
+					break
+				}
+			}
+			if !found {
+				models = append([]ModelInfo{{ID: config.DefaultModel, Name: config.DefaultModel}}, models...)
+			}
+		}
+
+		// Sort models alphabetically
+		sort.Slice(models, func(i, j int) bool {
+			return models[i].ID < models[j].ID
+		})
+
+		// Convert to OpenAI models list structure
+		type OpenAIModel struct {
+			ID      string `json:"id"`
+			Object  string `json:"object"`
+			Created int64  `json:"created"`
+			OwnedBy string `json:"owned_by"`
+		}
+
+		type OpenAIModelsResponse struct {
+			Object string        `json:"object"`
+			Data   []OpenAIModel `json:"data"`
+		}
+
+		openAIModels := make([]OpenAIModel, 0, len(models))
+		now := time.Now().Unix()
+		for _, m := range models {
+			openAIModels = append(openAIModels, OpenAIModel{
+				ID:      m.ID,
+				Object:  "model",
+				Created: now,
+				OwnedBy: provider,
+			})
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(OpenAIModelsResponse{
+			Object: "list",
+			Data:   openAIModels,
+		})
 		return
 	}
 
@@ -426,3 +530,55 @@ func fetchLMStudioModels(client *http.Client) ([]ModelInfo, error) {
 	}
 	return models, nil
 }
+
+func getStaticFallbackModels(provider string) []ModelInfo {
+	switch provider {
+	case "openai":
+		return []ModelInfo{
+			{ID: "gpt-4o", Name: "gpt-4o"},
+			{ID: "gpt-4o-mini", Name: "gpt-4o-mini"},
+			{ID: "gpt-4-turbo", Name: "gpt-4-turbo"},
+			{ID: "gpt-4", Name: "gpt-4"},
+			{ID: "gpt-3.5-turbo", Name: "gpt-3.5-turbo"},
+		}
+	case "anthropic":
+		return []ModelInfo{
+			{ID: "claude-3-5-sonnet-latest", Name: "claude-3-5-sonnet-latest"},
+			{ID: "claude-3-5-haiku-latest", Name: "claude-3-5-haiku-latest"},
+			{ID: "claude-3-opus-latest", Name: "claude-3-opus-latest"},
+			{ID: "claude-3-sonnet-20240229", Name: "claude-3-sonnet-20240229"},
+			{ID: "claude-3-haiku-20240307", Name: "claude-3-haiku-20240307"},
+		}
+	case "google":
+		return []ModelInfo{
+			{ID: "gemini-1.5-pro", Name: "gemini-1.5-pro"},
+			{ID: "gemini-1.5-flash", Name: "gemini-1.5-flash"},
+			{ID: "gemini-2.0-flash-exp", Name: "gemini-2.0-flash-exp"},
+		}
+	case "deepseek":
+		return []ModelInfo{
+			{ID: "deepseek-chat", Name: "deepseek-chat"},
+			{ID: "deepseek-coder", Name: "deepseek-coder"},
+		}
+	case "mistral":
+		return []ModelInfo{
+			{ID: "mistral-large-latest", Name: "mistral-large-latest"},
+			{ID: "open-mixtral-8x22b", Name: "open-mixtral-8x22b"},
+			{ID: "mistral-small-latest", Name: "mistral-small-latest"},
+		}
+	case "minimax":
+		return []ModelInfo{
+			{ID: "abab6.5s-chat", Name: "abab6.5s-chat"},
+			{ID: "abab6.5t-chat", Name: "abab6.5t-chat"},
+			{ID: "abab6.5-chat", Name: "abab6.5-chat"},
+		}
+	case "groq":
+		return []ModelInfo{
+			{ID: "llama-3.1-70b-versatile", Name: "llama-3.1-70b-versatile"},
+			{ID: "llama3-70b-8192", Name: "llama3-70b-8192"},
+			{ID: "mixtral-8x7b-32768", Name: "mixtral-8x7b-32768"},
+		}
+	}
+	return []ModelInfo{}
+}
+

@@ -1917,6 +1917,22 @@ ${showSnippetModal}`}
 
               </div>
 
+              <div>
+
+                <h3 className="text-sm font-bold text-gray-300 mb-2 uppercase tracking-wide">Hermes Agent</h3>
+
+                <pre className="bg-black border border-white/10 p-4 rounded-xl text-xs font-mono text-pink-300 overflow-x-auto">
+
+{`Custom endpoint URL:
+${process.env.NEXT_PUBLIC_PROXY_URL || 'http://localhost:8080'}
+
+API Key:
+${showSnippetModal}`}
+
+                </pre>
+
+              </div>
+
             </div>
 
             <div className="mt-6 flex justify-end">
