@@ -64,7 +64,13 @@ Bien que la sécurité et l'observabilité soient au cœur du système, Synapse 
 - **Quatre niveaux de cache dans un seul binaire :**
   - **L0 In-flight Dedup :** Bloque et déduplique les requêtes concurrentes identiques (idéal pour le fan-out d'agents).
   - **L1 Exact Match :** Correspondance SHA-256 ultra-rapide pour les scripts qui relancent exactement la même requête.
-  - **L2 Semantic Match :** Recherche vectorielle basée sur ONNX (MiniLM) pour les requêtes conceptuellement identiques. Désactivé automatiquement sur les conversations multi-tours pour éviter la corruption d'état.
+  - **L2 Semantic Match :** Recherche vectorielle basée sur `paraphrase-multilingual-MiniLM-L12-v2`
+    (384 dimensions) via un embedder Rust compilé en CGo (voir `rust-embedder/`, lié statiquement en
+    `librust_embedder.a`). La similarité est calculée par distance cosinus dans un index RediSearch
+    `idx:l2cache`. Seuil de hit : `score < semanticTolerance` (par défaut 0.15, soit similarité > 0.85).
+    L'embedder n'embed que le **dernier message user** (system / tool_calls / tool messages sont strippés
+    en amont) pour que la similarité reste sémantiquement correcte. Initialisé via
+    `cache.InitGlobalEmbedder()` au démarrage du binaire.
   - **L3 Compression préservant les préfixes :** Élague intelligemment les anciens blocs `<thought>`, tronque les sorties d'outils surdimensionnées et condense l'historique. Il maintient un préfixe identique à l'octet près afin que le cache de prompt natif du fournisseur (Upstream) reste efficace à 99%. Comprend plusieurs modules avancés :
     - **SmartCrusher :** Détecte les grands tableaux JSON homogènes, extrait leur schéma et les compacte sous forme de lignes CSV optimisées. En cas de saturation du contexte, il applique une troncature intelligente (conserve 30% du début et 15% de la fin) avec les métadonnées `_ccr_dropped` pour garantir l'intégrité syntaxique.
     - **DiffCompressor :** Nettoie les grands diffs git en ne conservant que 2 lignes de contexte inchangées autour des hunks. Les diffs de plus de 50 lignes sont déchargés dans l'archive L3 CCR (Compression Content Repository) et remplacés par des clés d'identification courtes `<<ccr:hash>>`.

@@ -15,6 +15,15 @@ Ce répertoire contient le client local autonome Windows pour Synapse Proxy, dé
 - **L2** : similarité Jaccard ≥ 0.85 sur le system prompt.
 - **L3** : similarité Jaccard ≥ 0.70 sur le system prompt OU le dernier message user (émule CCR chunk-based).
 
+> **Note:** the SaaS proxy uses an in-process Rust + CGo embedder
+> (`paraphrase-multilingual-MiniLM-L12-v2`, 384-dim) plus a
+> RediSearch `idx:l2cache` index for true semantic L2 matching.
+> The local-client uses word-level Jaccard for L2 because it
+> can't pull a Rust static lib or a RediSearch sidecar into
+> a single self-contained Windows .exe. When the local-client
+> is forward to a SaaS endpoint, the upstream cache is the
+> better lever for true semantic match.
+
 ### Pipeline de compression L3 (byte-preserving)
 Le proxy applique automatiquement les règles L3 sur **chaque** requête avant le cache lookup et l'upstream :
 
@@ -200,7 +209,7 @@ response to client
 
 ### Quand le cache hit arrive
 - **L1** : payload byte-identique entre deux requêtes successives (même system, même user, même tools, même structure).
-- **L2** : system prompt à 85% Jaccard avec une entrée cachée. Convient aux conversations où seul le system prompt est stable.
+- **L2** : system prompt à 85% Jaccard avec une entrée cachée. Convient aux conversations où seul le system prompt est stable. *(Voir la note plus haut : le proxy SaaS utilise MiniLM-L12-v2 + RediSearch plutôt que Jaccard.)*
 - **L3** : system prompt OU dernier user message à 70% Jaccard. Plus permissif, accepte les reformulations.
 
 ### Quand le cache miss arrive
