@@ -293,9 +293,19 @@ func streamResponse(
 		if cacheLvl == "L3" && promptOpt > 0 {
 			ratio := float64(truePromptTokens) / float64(promptOpt)
 			promptOrig = int(float64(promptOrig) * ratio)
+			// IMPORTANT: do NOT overwrite promptOpt with the provider's
+			// truePromptTokens. The provider may report truePromptTokens
+			// as the post-cache_read value (cheap), and our local
+			// promptOpt reflects the byte-stability-compressed payload
+			// (with savings). Overwriting with the smaller provider
+			// value would lose the byte-stability savings in the
+			// dashboard. The ratio above already aligned promptOrig to
+			// the provider's billing scale; promptOpt stays as-is.
+		} else {
+			// For non-L3 cache levels, prefer the provider's billing
+			// truth over the local tiktoken estimate.
+			promptOpt = truePromptTokens
 		}
-
-		promptOpt = truePromptTokens
 
 		// If no optimization was applied (Standard Routing), the original tokens
 		// should match exactly what the provider billed, to avoid false "savings" anomalies.
