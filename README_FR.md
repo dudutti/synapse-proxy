@@ -69,7 +69,24 @@ Bien que la sécurité et l'observabilité soient au cœur du système, Synapse 
     - **SmartCrusher :** Détecte les grands tableaux JSON homogènes, extrait leur schéma et les compacte sous forme de lignes CSV optimisées. En cas de saturation du contexte, il applique une troncature intelligente (conserve 30% du début et 15% de la fin) avec les métadonnées `_ccr_dropped` pour garantir l'intégrité syntaxique.
     - **DiffCompressor :** Nettoie les grands diffs git en ne conservant que 2 lignes de contexte inchangées autour des hunks. Les diffs de plus de 50 lignes sont déchargés dans l'archive L3 CCR (Compression Content Repository) et remplacés par des clés d'identification courtes `<<ccr:hash>>`.
     - **ASTCodeCompressor :** Analyse le code source (Python, Go, JS/TS) et élague le corps des fonctions/classes de plus de 5 lignes, en injectant des commentaires d'élision valides pour économiser jusqu'à 70% de tokens de prompt.
-    - **Optimisation Anthropic KV-Cache :** Injecte automatiquement la directive `"cache_control": {"type": "ephemeral"}` aux endroits stratégiques (system prompt, liste des outils, avant-dernier message utilisateur) pour maximiser le cache de prompt natif d'Anthropic.
+    - **Endpoint Translator OpenAI↔Anthropic :** Active le cache de prompt du provider sur les endpoints
+      Anthropic-compatibles (Minimax, DeepSeek, Bedrock, Vertex). Quand la clé virtuelle a
+      `use_anthropic_endpoint=true`, le proxy traduit le payload OpenAI en format `/v1/messages`
+      (hoisting du system message, conversion des content blocks, gestion des tool_use / tool_result)
+      et forwarde vers l'endpoint Anthropic du provider. La réponse est traduite en sens inverse
+      avant d'être retournée au client. Les compteurs `cache_read_input_tokens` de la réponse
+      Anthropic sont exposés comme `cached_tokens` dans `prompt_tokens_details` OpenAI. Sur Minimax,
+      le cache de prompt byte-stable atteint 95-99% d'économie sur les requêtes multi-turn.
+    - **L3 Compression préservant les préfixes (Byte-Preserving) :** Élague au niveau byte les
+      anciens blocs `<thinking>`, `<thought>`, `<scratchpad>`, tronque les tool outputs > 200 chars
+      en place et blank les 3+ tool results consécutifs du même tool. **Le préfixe reste
+      byte-identique**, ce qui permet au cache de prompt provider (Anthropic `cache_control`,
+      Minimax cache-read, OpenAI automatic caching) de hit dès le 2ème tour. Carve-out pour les
+      todo-lists (status:pending, todos:[]) : préservées verbatim pour ne pas casser les
+      agents multi-tour (Hermes, OpenClaw).
+    - **Détection correcte de L3 dans la télémétrie :** Quand `len(bodyBytes) < len(rawSnapshot)`,
+      la ligne `RequestLog` est taggée `cacheLevel='L3'` avec `inSaved > 0` et `outSaved > 0`.
+      Backfill de 125 lignes historiques effectué en prod lors du déploiement initial.
   - **Dédoublonnement Sémantique des Outils (Semantic Tool Dedup) :** Intercepte les appels d'outils du LLM et récupère les résultats mis en cache à partir d'appels similaires, court-circuitant ainsi les boucles d'exécution côté client.
 
 <p align="center">
