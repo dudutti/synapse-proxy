@@ -58,19 +58,24 @@ Every request is persisted to a PostgreSQL database, turning black-box agent beh
 
 ## ⚡ Cost Optimization as a Bonus
 
-Though security and observability take center stage, Synapse Proxy features a state-of-the-art caching engine designed to minimize latency and token waste. 
+Though security and observability take center stage, Synapse Proxy features a state-of-the-art caching engine designed to minimize latency and token waste.
 
-- **Drop-in OpenAI replacement:** No SDK changes required. Just point your client at `http://<host>:8080/v1` with an `Authorization: Bearer sk-opti-...` virtual key.
-- **Four caches in one binary:**
-  - **L0 In-flight Dedup:** Blocks and deduplicates identical concurrent requests (useful for agent fan-outs).
-  - **L1 Exact Match:** Ultra-fast SHA-256 match for scripts retrying the exact same query.
-  - **L2 Semantic Match:** ONNX-based vector search (MiniLM) for conceptually identical queries. Auto-disabled on multi-turn conversations to prevent state corruption.
-  - **L3 Prefix-Preserving Compression:** Intelligently prunes stale `<thought>` blocks, truncates oversized tool outputs, and condenses older history. It maintains a byte-exact prefix so the upstream provider's native prompt cache remains 99% effective. Includes advanced hooks:
-    - **SmartCrusher:** Analyzes large homogeneous JSON arrays in prompts, extracts their schema, and packs them into space-optimized CSV formats. When prompt headroom is exhausted, it applies a lossy drop (retaining 30% from the start and 15% from the end) with `_ccr_dropped` metadata to preserve schema validity.
-    - **DiffCompressor:** Trims large git diffs in prompts by retaining only 2 lines of unchanged context around modifications. Diffs exceeding 50 lines are automatically offloaded to the L3 CCR (Compression Content Repository) and replaced with standard `<<ccr:hash>>` reference keys.
-    - **ASTCodeCompressor:** Parses Python, Go, and Javascript/Typescript source files in prompts and strips out function/class bodies longer than 5 lines, replacing them with syntax-valid comments.
-    - **Anthropic KV-Cache Alignment:** Injects `"cache_control": {"type": "ephemeral"}` at strategic boundaries (system prompt, last tool list, second-to-last user turn) to maximize Anthropic's native cache effectiveness.
-  - **Semantic Tool Deduplication:** Intercepts LLM tool calls and retrieves cached outputs from similar prior invocations, bypassing client-side execution loops.
+- **Drop-in OpenAI replacement:** No SDK changes required. Just point your client at `http://<host>:8080/v1` with an `Authorization: Bearer sk-opti-...` virtual key. The proxy speaks OpenAI chat completions on the wire to the client; the upstream is selectable per virtual key.
+- **Three-tier cache pipeline (L1/L2/L3):**
+  - **L1 Exact Match:** SHA-256 hash of the post-L3 payload, byte-stable. Identical requests hit the cache in O(1).
+  - **L2 Semantic Match (Jaccard ≥ 0.85):** Word-level Jaccard similarity on the system prompt. Catches "the system prompt is the same but the user message is different" cases.
+  - **L3 Relaxed Semantic Match (Jaccard ≥ 0.70):** Jaccard on the system prompt or the last user message. Catches light paraphrases.
+  - L2 and L3 use Jaccard, not ONNX vector search. This is by design: it's fast (no embedding model load), deterministic, and works on small prompts. For deeper semantic match, the upstream provider's own prompt cache (Anthropic, OpenAI, MiniMax) is the better lever — see the Anthropic endpoint section below.
+- **L3 Byte-Preserving Compression:** Intelligently prunes stale `<thinking>`, `<thought>`, and `<scratchpad>` blocks from non-recent assistant messages; truncates tool outputs over 200 characters; blanks the content of repeated (3rd+) same-name tool results. **The prefix stays byte-identical**, which is what allows the upstream provider's native prompt cache to keep hitting from turn 2 onwards.
+  - **Todo-list carve-out:** Any tool payload whose content begins with a `status: pending` / `status: in_progress` / `todos: [...]` anchor is preserved verbatim, so multi-turn agents (Hermes, OpenClaw) keep their plan visible across turns. Validated end-to-end with Hermes-style payloads in production: **44.7% of the body bytes saved on a realistic multiturn payload, while the prefix stays byte-stable**.
+- **Anthropic / `v1/messages` endpoint translator:** When a virtual key is configured with `use_anthropic_endpoint=true` and the provider is `minimax`, `deepseek`, `bedrock`, or `vertex`, the proxy translates the OpenAI-shape request into the Anthropic `/v1/messages` format (system message hoisting, content block conversion, tool_use/tool_result mapping, max_tokens defaulting) and forwards it to the provider's Anthropic-compatible endpoint. The response is translated back to OpenAI shape on the way out. The Anthropic `cache_read_input_tokens` counter is exposed as `cached_tokens` in the OpenAI `prompt_tokens_details` block. On MiniMax this activates their prompt cache, which we measured at **>99% cache hit ratio** on byte-stable prefixes after the first request.
+- **Cache level telemetry:** When the L3 byte-preserving pipeline actually shrinks the payload, the `RequestLog` row is tagged `cacheLevel='L3'` with non-zero `inSaved` / `outSaved` / `costSaved`. A one-time backfill of 125 historical rows (from before the byte-stable compressor shipped) was run in production to correct the labels.
+
+### Caveats and design notes
+
+- The "prefix byte-stable" guarantee requires the proxy to be the *only* writer of the prefix. If you inject a request with re-ordered keys, a different system prompt, or extra `cache_control` blocks, the prefix is no longer byte-stable and the upstream cache misses. The proxy preserves the original key order and whitespace.
+- The `L3` cache label in the dashboard is set on the byte-preserving compression path only. CCR semantic cache hits still get `L3`, but they go through the Jaccard / SHA-256 paths described above.
+- The local-client (standalone `synapse-local.exe`) ships the same byte-preserving L3 + Anthropic translator pipeline as the SaaS, with SQLite replacing Redis. See `local-client/README.md`.
 
 <p align="center">
   <img src="docs/assets/diag_en.png" alt="Synapse Proxy Diagram" width="650" />
