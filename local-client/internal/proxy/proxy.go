@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"synapse-local/internal/cache"
+	"synapse-local/internal/compress"
 	"synapse-local/internal/db"
 	"synapse-local/internal/license"
 )
@@ -26,7 +27,7 @@ type ChatCompletionRequest struct {
 type ChatCompletionResponse struct {
 	ID      string `json:"id"`
 	Object  string `json:"object"`
-	Created int64  `json:"created"`
+	Created int64  `json:"model"`
 	Model   string `json:"model"`
 	Choices []struct {
 		Index        int `json:"index"`
@@ -135,7 +136,7 @@ func HandleV1Models(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		req.Header.Set("Authorization", authHeader)
-		
+
 		resp, err := client.Do(req)
 		if err != nil {
 			http.Error(w, "SaaS server unreachable: "+err.Error(), http.StatusBadGateway)
@@ -230,23 +231,32 @@ func HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	provider := strings.ToLower(r.Header.Get("X-Synapse-Provider"))
+	if provider == "" {
+		provider = "openai" // Default fallback
+	}
+
+	// Determine the default model the upstream expects
+	// (e.g. "MiniMax-M3" for Minimax's Anthropic endpoint).
+	defaultModel := chatReqDefaultModel(bodyBytes)
+	// Apply the full BeforeRequest pipeline: byte-preserving L3
+	// compression + (optional) OpenAI→Anthropic translation.
+	bodyBytes, _ = compress.RunBefore(bodyBytes, provider, defaultModel)
+
 	var chatReq ChatCompletionRequest
 	if err := json.Unmarshal(bodyBytes, &chatReq); err != nil {
 		http.Error(w, "invalid request json", http.StatusBadRequest)
 		return
 	}
 
-	// Extract prompt text
-	promptText := ""
-	for _, msg := range chatReq.Messages {
-		if content, ok := msg["content"].(string); ok {
-			promptText += content + "\n"
-		}
-	}
-
-	provider := strings.ToLower(r.Header.Get("X-Synapse-Provider"))
-	if provider == "" {
-		provider = "openai" // Default fallback
+	// Build a payload signature for cache lookup. We use the
+	// post-L3 payload so the cache key matches what's actually
+	// forwarded upstream.
+	pc, pcErr := cache.MakePayloadContext(bodyBytes)
+	if pcErr != nil {
+		// Malformed payload — fall through to forward and let
+		// the upstream reject it.
+		pc = cache.PayloadContext{Hash: cache.ComputePayloadHash(bodyBytes)}
 	}
 
 	// 1. Check Caches
@@ -254,15 +264,15 @@ func HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	cacheLevel := "NONE"
 	cachedResponse := ""
 
-	if cached, ok := cache.GetL1(promptText); ok {
+	if cached, ok := cache.GetL1(pc); ok {
 		cacheHit = true
 		cacheLevel = "L1"
 		cachedResponse = cached
-	} else if cached, ok := cache.GetL2(promptText); ok {
+	} else if cached, ok := cache.GetL2(pc); ok {
 		cacheHit = true
 		cacheLevel = "L2"
 		cachedResponse = cached
-	} else if cached, ok := cache.GetL3(promptText); ok {
+	} else if cached, ok := cache.GetL3(pc); ok {
 		cacheHit = true
 		cacheLevel = "L3"
 		cachedResponse = cached
@@ -271,8 +281,7 @@ func HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if cacheHit {
 		w.Header().Set("X-Synapse-Cache", "HIT")
 		w.Header().Set("X-Synapse-Level", cacheLevel)
-		
-		// Build standard OpenAI chat response
+
 		resp := ChatCompletionResponse{
 			ID:      "chatcmpl-" + generateID(),
 			Object:  "chat.completion",
@@ -292,9 +301,8 @@ func HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 			FinishReason: "stop",
 		}
 		resp.Choices = append(resp.Choices, choice)
-		
-		// Estimate tokens
-		pTokens := countTokens(promptText)
+
+		pTokens := pc.NumMessages * 1000 // rough estimate
 		cTokens := countTokens(cachedResponse)
 		resp.Usage.PromptTokens = pTokens
 		resp.Usage.CompletionTokens = cTokens
@@ -303,57 +311,74 @@ func HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_ = json.NewEncoder(w).Encode(resp)
 
-		// Record the saved log
-		costSaved := float64(pTokens) * 0.000015 // approximated
-		recordLog(cacheLevel, chatReq.Model, provider, pTokens, cTokens, 0, cTokens, 10, costSaved)
+		costSaved := float64(pTokens) * 0.000015
+		recordLog(cacheLevel, chatReq.Model, provider, pTokens, cTokens, pTokens, cTokens, 10, costSaved)
 		return
 	}
 
-	// 2. Cache Miss - Forward to Target Upstream LLM Server
+	// 2. Cache Miss — forward to upstream. The pipeline may have
+	// already translated the payload to Anthropic shape, so we
+	// pick the right URL and headers.
 	upstreamURL := ""
-	if provider == "ollama" {
+	upstreamHeaders := http.Header{}
+	upstreamHeaders.Set("Content-Type", "application/json")
+	if auth := r.Header.Get("Authorization"); auth != "" {
+		upstreamHeaders.Set("Authorization", auth)
+	}
+
+	anthropicCompat := compress.ProviderUsesAnthropicShape(provider)
+
+	switch provider {
+	case "ollama":
 		upstreamURL = "http://localhost:11434/v1/chat/completions"
-	} else if provider == "lmstudio" {
+	case "lmstudio":
 		upstreamURL = "http://localhost:1234/v1/chat/completions"
-	} else {
-		// Public Cloud LLM target URL fallbacks
-		upstreamURL = "https://api.openai.com/v1/chat/completions"
-		if provider == "anthropic" {
-			upstreamURL = "https://api.anthropic.com/v1/messages"
-		}
-	}
-
-	// Dynamic token compression simulation (if license allows)
-	compressedText := promptText
-	origTokens := countTokens(promptText)
-	optTokens := origTokens
-
-	if license.CheckQuota() {
-		// Compact spaces/tabs, remove comments (simulation of compressors)
-		compressedText = compactPrompt(promptText)
-		optTokens = countTokens(compressedText)
-	}
-
-	// Rebuild request if compression changed prompt length
-	if optTokens < origTokens {
-		// Update request messages content
-		for _, msg := range chatReq.Messages {
-			if _, ok := msg["content"].(string); ok {
-				msg["content"] = compactPrompt(msg["content"].(string))
+	case "minimax", "minimax-anthropic":
+		// Minimax exposes both endpoints. The Anthropic-shape
+		// path is the only one with provider-side prompt cache.
+		if anthropicCompat {
+			upstreamURL = "https://api.minimax.io/anthropic/v1/messages"
+			upstreamHeaders.Del("Authorization")
+			if auth := r.Header.Get("Authorization"); auth != "" {
+				upstreamHeaders.Set("x-api-key", strings.TrimPrefix(auth, "Bearer "))
+				upstreamHeaders.Set("anthropic-version", "2023-06-01")
 			}
+		} else {
+			upstreamURL = "https://api.minimax.io/v1/chat/completions"
 		}
-		bodyBytes, _ = json.Marshal(chatReq)
+	case "deepseek":
+		if anthropicCompat {
+			upstreamURL = "https://api.deepseek.com/anthropic/v1/messages"
+			upstreamHeaders.Del("Authorization")
+			if auth := r.Header.Get("Authorization"); auth != "" {
+				upstreamHeaders.Set("x-api-key", strings.TrimPrefix(auth, "Bearer "))
+				upstreamHeaders.Set("anthropic-version", "2023-06-01")
+			}
+		} else {
+			upstreamURL = "https://api.deepseek.com/chat/completions"
+		}
+	case "anthropic", "claude":
+		upstreamURL = "https://api.anthropic.com/v1/messages"
+		upstreamHeaders.Del("Authorization")
+		if auth := r.Header.Get("Authorization"); auth != "" {
+			upstreamHeaders.Set("x-api-key", strings.TrimPrefix(auth, "Bearer "))
+			upstreamHeaders.Set("anthropic-version", "2023-06-01")
+		}
+	default:
+		upstreamURL = "https://api.openai.com/v1/chat/completions"
 	}
+
+	originalOptTokens := len(bodyBytes) / 4 // rough tokens estimate (4 bytes/token)
 
 	t0 := time.Now()
 	req, _ := http.NewRequest("POST", upstreamURL, bytes.NewBuffer(bodyBytes))
-	req.Header.Set("Content-Type", "application/json")
-	// Forward authorization header if it exists
-	if auth := r.Header.Get("Authorization"); auth != "" {
-		req.Header.Set("Authorization", auth)
+	for k, vv := range upstreamHeaders {
+		for _, v := range vv {
+			req.Header.Add(k, v)
+		}
 	}
 
-	client := &http.Client{}
+	client := &http.Client{Timeout: 600 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		http.Error(w, "upstream connection error: "+err.Error(), http.StatusBadGateway)
@@ -366,6 +391,9 @@ func HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	respBodyBytes, _ := io.ReadAll(resp.Body)
+	// Translate Anthropic response back to OpenAI shape so the
+	// caller doesn't have to know.
+	respBodyBytes = compress.RunAfter(respBodyBytes, provider, defaultModel)
 	_, _ = w.Write(respBodyBytes)
 
 	duration := time.Since(t0).Milliseconds()
@@ -381,19 +409,28 @@ func HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Save L1 Cache for next hits
 	if resp.StatusCode == http.StatusOK && compText != "" {
-		cache.SetL1(promptText, compText)
+		cache.SetL1(pc, compText)
 	}
 
-	// Record token count and logs
-	savedTokens := int64(origTokens - optTokens)
-	if savedTokens > 0 {
-		license.IncrementQuota(savedTokens)
-	}
+	costSaved := float64(originalOptTokens) * 0.000015 * 0.5
+	recordLog("NONE", chatReq.Model, provider,
+		originalOptTokens, chatResp.Usage.CompletionTokens,
+		originalOptTokens, chatResp.Usage.CompletionTokens,
+		duration, costSaved)
+}
 
-	costSaved := float64(savedTokens) * 0.000015
-	recordLog("NONE", chatReq.Model, provider, origTokens, chatResp.Usage.CompletionTokens, optTokens, chatResp.Usage.CompletionTokens, duration, costSaved)
+// chatReqDefaultModel extracts the model field from an
+// OpenAI-shape request body. Returns "" if the body is not
+// valid JSON or has no model field.
+func chatReqDefaultModel(body []byte) string {
+	var probe struct {
+		Model string `json:"model"`
+	}
+	if err := json.Unmarshal(body, &probe); err != nil {
+		return ""
+	}
+	return probe.Model
 }
 
 func getCacheType(lvl string) string {
@@ -440,14 +477,19 @@ func recordLog(level, model, provider string, tokensIn, tokensOut, tokensInOpt, 
 	}
 }
 
+// compactPrompt kept for backwards compat with the older
+// collapse-only path used by the cached-response fallback when
+// the L3 compressor refused to parse the payload.
 func compactPrompt(text string) string {
-	// Simple local compressor (collapse multiple whitespaces, strip HTML-like tags)
 	text = strings.Join(strings.Fields(text), " ")
 	return text
 }
 
 func countTokens(text string) int {
 	words := len(strings.Fields(text))
+	if words == 0 {
+		return 0
+	}
 	return int(math.Ceil(float64(words) * 1.3))
 }
 
@@ -594,10 +636,10 @@ func HandleAnalyticsRoute(w http.ResponseWriter, r *http.Request) {
 	var l1Hits, l2Hits, l3Hits, misses int64
 
 	_ = db.DB.QueryRow(`
-		SELECT 
-			COALESCE(SUM(tokens_in), 0), 
-			COALESCE(SUM(tokens_out), 0), 
-			COALESCE(SUM(tokens_in_opt), 0), 
+		SELECT
+			COALESCE(SUM(tokens_in), 0),
+			COALESCE(SUM(tokens_out), 0),
+			COALESCE(SUM(tokens_in_opt), 0),
 			COALESCE(SUM(tokens_out_opt), 0),
 			COALESCE(SUM(cost_saved), 0)
 		FROM request_logs
@@ -627,9 +669,9 @@ func HandleAnalyticsRoute(w http.ResponseWriter, r *http.Request) {
 
 	// Fetch recent 100 logs
 	logRows, err := db.DB.Query(`
-		SELECT id, cache_level, model, provider, tokens_in, tokens_out, tokens_in_opt, tokens_out_opt, duration_ms, cost_saved, created_at 
-		FROM request_logs 
-		ORDER BY created_at DESC 
+		SELECT id, cache_level, model, provider, tokens_in, tokens_out, tokens_in_opt, tokens_out_opt, duration_ms, cost_saved, created_at
+		FROM request_logs
+		ORDER BY created_at DESC
 		LIMIT 100
 	`)
 	var logs []map[string]interface{}
@@ -706,17 +748,17 @@ func HandleAnalyticsRoute(w http.ResponseWriter, r *http.Request) {
 }
 
 type AnalyticsResponse struct {
-	TotalTokensSent          map[string]int64  `json:"totalTokensSent"`
-	TotalTokensOptimized     map[string]int64  `json:"totalTokensOptimized"`
-	CacheHitDistribution    map[string]int64  `json:"cacheHitDistribution"`
-	CacheByProvider          map[string]interface{} `json:"cacheByProvider"`
-	CacheHitRateByProvider   map[string]float64 `json:"cacheHitRateByProvider"`
-	MeasuredSavings          map[string]int64  `json:"measuredSavings"`
-	OpportunitySavings       map[string]interface{} `json:"opportunitySavings"`
-	TotalSavingsByClass      map[string]float64 `json:"totalSavingsByClass"`
-	SavingsByClassByProvider map[string]interface{} `json:"savingsByClassByProvider"`
-	TotalSavingsReal         float64           `json:"totalSavingsReal"`
-	ChartData                []interface{}     `json:"chartData"`
+	TotalTokensSent          map[string]int64         `json:"totalTokensSent"`
+	TotalTokensOptimized     map[string]int64         `json:"totalTokensOptimized"`
+	CacheHitDistribution     map[string]int64         `json:"cacheHitDistribution"`
+	CacheByProvider          map[string]interface{}    `json:"cacheByProvider"`
+	CacheHitRateByProvider   map[string]float64       `json:"cacheHitRateByProvider"`
+	MeasuredSavings          map[string]int64         `json:"measuredSavings"`
+	OpportunitySavings       map[string]interface{}    `json:"opportunitySavings"`
+	TotalSavingsByClass      map[string]float64       `json:"totalSavingsByClass"`
+	SavingsByClassByProvider map[string]interface{}    `json:"savingsByClassByProvider"`
+	TotalSavingsReal         float64                  `json:"totalSavingsReal"`
+	ChartData                []interface{}            `json:"chartData"`
 	Logs                     []map[string]interface{} `json:"logs"`
 }
 
@@ -771,7 +813,6 @@ func HandleAnalyticsStreamRoute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Establish connection
 	fmt.Fprintf(w, "data: {\"connected\": true}\n\n")
 	flusher.Flush()
 
