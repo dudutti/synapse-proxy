@@ -409,13 +409,32 @@ go workers.PushTelemetry(virtualKey, provider, reqModel, 0, 0, 0, 0, 0,
 		// that shadowed the function-level optResult (line 153). The closure
 		// in executeRequest captured the outer (empty) variable, causing
 		// upstream payload len=0. Now assigns to the existing function-level var.
-		optResult = optiagent.OptimizationResult{
-			Payload:          bodyBytes,
-			PayloadHash:      optiagent.HashPayload(bodyBytes),
-			PromptTokensOrig: utils.CountTokens(string(bodyBytes)),
-			PromptTokensOpt:  utils.CountTokens(string(bodyBytes)),
+		//
+		// After RunBeforeHooks, hctx.OptimizedPayload holds the post-hook
+		// payload (potentially compressed by the byte-preserving L3
+		// hook). We use THAT, not the raw bodyBytes, so that the L3
+		// savings actually reach the upstream provider. The
+		// PromptTokensOpt counter is computed on the post-hook
+		// payload so the dashboard's "In saved" / "out saved" reflect
+		// the actual savings.
+		optimizedPayload := hctx.OptimizedPayload
+		if len(optimizedPayload) == 0 {
+			optimizedPayload = bodyBytes
 		}
-		log.Printf("[strangler] hook-only mode: payload=%d bytes hash=%s", len(optResult.Payload), optResult.PayloadHash[:12])
+		optResult = optiagent.OptimizationResult{
+			Payload:          optimizedPayload,
+			PayloadHash:      optiagent.HashPayload(optimizedPayload),
+			PromptTokensOrig: utils.CountTokens(string(bodyBytes)),
+			PromptTokensOpt:  utils.CountTokens(string(optimizedPayload)),
+		}
+		if saved := len(bodyBytes) - len(optimizedPayload); saved > 0 {
+			log.Printf("[strangler] hook-only mode with L3 compression: raw=%d -> compressed=%d bytes (saved %d = %.1f%%) hash=%s",
+				len(bodyBytes), len(optimizedPayload), saved,
+				100.0*float64(saved)/float64(len(bodyBytes)),
+				optResult.PayloadHash[:12])
+		} else {
+			log.Printf("[strangler] hook-only mode: payload=%d bytes hash=%s", len(optResult.Payload), optResult.PayloadHash[:12])
+		}
 
 		// 1. L1 Cache (Exact Match)
 		if keyConfig.EnableL1 {
