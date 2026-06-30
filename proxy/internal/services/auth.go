@@ -40,6 +40,14 @@ type VirtualKeyConfig struct {
 	
 	// Tier Constraints
 	LimitExceeded      bool
+
+	// UseAnthropicEndpoint: when true AND provider is minimax,
+	// the proxy forwards to /anthropic/v1/messages instead of
+	// /v1/chat/completions. This unlocks Minimax's prompt cache
+	// (99% cache hit on byte-stable prefixes per the vendor
+	// docs). See proxy.go executeRequest and the
+	// OpenAIToAnthropic translator for the conversion logic.
+	UseAnthropicEndpoint bool
 }
 
 // ValidateVirtualKey checks the Authorization header and fetches the virtual key config from Redis
@@ -114,6 +122,8 @@ func ValidateVirtualKey(ctx context.Context, authHeader string) (*VirtualKeyConf
 		RedactPII:            val["redact_pii"] == "true",
 		ToolTtls:             val["tool_ttls"],
 		LimitExceeded:      val["limit_exceeded"] == "true",
+
+		UseAnthropicEndpoint: val["use_anthropic_endpoint"] == "true",
 	}
 
 	return config, nil

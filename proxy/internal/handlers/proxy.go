@@ -270,6 +270,7 @@ func ProxyHandler(w http.ResponseWriter, r *http.Request) {
 			"session_token_limit":     keyConfig.SessionTokenLimit,
 			"block_unknown_tools":     keyConfig.BlockUnknownTools,
 			"allowed_tools":           keyConfig.AllowedTools,
+			"default_model":           keyConfig.DefaultModel,
 		},
 	}
 	optiagent.SetFingerprintEnabled(virtualKey, keyConfig.FingerprintLoopDetect)
@@ -614,6 +615,12 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 			if envURL := os.Getenv("MINIMAX_UPSTREAM_URL"); envURL != "" {
 				targetURL = envURL
 			}
+		case "minimax-anthropic":
+			// Anthropic-native upstream path for Minimax. The
+			// payload has already been converted to the
+			// Anthropic /v1/messages shape by the
+			// AnthropicEndpointHook (priority 800).
+			targetURL = "https://api.minimax.io/anthropic/v1/messages"
 		case "deepseek":
 			targetURL = "https://api.deepseek.com/chat/completions"
 		case "mistral":
@@ -695,7 +702,7 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 		}
 
 		req.Header.Set("Content-Type", "application/json")
-		if currentProvider == "anthropic" {
+		if currentProvider == "anthropic" || currentProvider == "minimax-anthropic" {
 			req.Header.Set("x-api-key", currentRealKey)
 			req.Header.Set("anthropic-version", "2023-06-01")
 		} else {
@@ -720,6 +727,13 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 	var resp *http.Response
 	var reqErr error
 	usedProvider := provider
+	// Switch to the Anthropic-native upstream when the VK has
+	// opted in. Routing /anthropic/v1/messages (rather than
+	// /v1/chat/completions) is what unlocks Minimax's prompt
+	// cache at 0.1x input rate per the vendor docs.
+	if keyConfig != nil && keyConfig.UseAnthropicEndpoint && provider == "minimax" {
+		usedProvider = "minimax-anthropic"
+	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {

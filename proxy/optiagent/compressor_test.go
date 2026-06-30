@@ -6,6 +6,7 @@
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -205,4 +206,77 @@ func longBase64ToolOutput() string {
 		out = append(out, filler...)
 	}
 	return string(out)
+}
+
+// TestCompressPayload_PreservesTodoList asserts that the L3 compressor
+// does NOT truncate the result of a read_todos / write_todo tool call,
+// because Hermes and similar agents store their plan there and need
+// the full list visible on every turn.
+func TestCompressPayload_PreservesTodoList(t *testing.T) {
+	todoJSON := `{"todos":[{"id":"1","content":"Analyse compression L3","status":"in_progress"},{"id":"2","content":"Refactor CompressPayload","status":"pending"},{"id":"3","content":"Run e2e tests","status":"pending"}]}`
+	// Wrap the todo list as a tool result with a long synthetic body
+	// that would normally trigger the 200-char truncation. The todo
+	// signature is in the first 512 chars so it must survive.
+	body := todoJSON + strings.Repeat(" padding padding padding ", 30)
+
+	raw := []byte(`{
+		"model": "claude-sonnet-4-6",
+		"messages": [
+			{"role": "user", "content": "what's on my plate?"},
+			{"role": "tool", "tool_call_id": "call_1", "name": "read_todos", "content": ` + strconvQuote(body) + `},
+			{"role": "assistant", "content": "Let me check the todos."},
+			{"role": "tool", "tool_call_id": "call_2", "name": "write_todo", "content": ` + strconvQuote(body) + `},
+			{"role": "tool", "tool_call_id": "call_3", "name": "write_todo", "content": ` + strconvQuote(body) + `},
+			{"role": "user", "content": "ok continue"}
+		]
+	}`)
+
+	out, err := CompressPayload(raw)
+	if err != nil {
+		t.Fatalf("CompressPayload: %v", err)
+	}
+
+	if !bytes.Contains(out, []byte(`"status":"in_progress"`)) {
+		t.Fatalf("todo list status lost after compression:\n%s", out)
+	}
+	if bytes.Contains(out, []byte("…truncated by Synapse Proxy L3")) {
+		t.Fatalf("todo list was truncated despite todo signature:\n%s", out)
+	}
+	// 5 todos × ≥3 occurrences each must remain in the output.
+	count := bytes.Count(out, []byte(`"id":"`))
+	if count < 15 {
+		t.Fatalf("expected ≥15 todo id entries after compression, got %d:\n%s", count, out)
+	}
+}
+
+// TestCompressPayload_TruncatesNonTodoToolOutput is the negative case:
+// non-todo tool outputs SHOULD still be truncated so we keep the L3
+// savings for noisy tool calls.
+func TestCompressPayload_TruncatesNonTodoToolOutput(t *testing.T) {
+	body := strings.Repeat("blah blah blah ", 200)
+
+	raw := []byte(`{
+		"model": "claude-sonnet-4-6",
+		"messages": [
+			{"role": "user", "content": "look at file"},
+			{"role": "tool", "tool_call_id": "call_1", "name": "read_file", "content": ` + strconvQuote(body) + `},
+			{"role": "assistant", "content": "seen"}
+		]
+	}`)
+
+	out, err := CompressPayload(raw)
+	if err != nil {
+		t.Fatalf("CompressPayload: %v", err)
+	}
+	if !bytes.Contains(out, []byte("…truncated by Synapse Proxy L3")) {
+		t.Fatalf("non-todo tool output was NOT truncated, regression:\n%s", out)
+	}
+}
+
+// strconvQuote is a tiny helper to JSON-encode a Go string without
+// pulling in fmt at the top of the test file (keeps the test
+// readable inline).
+func strconvQuote(s string) string {
+	b, _ := json.Marshal(s)
+	return string(b)
 }

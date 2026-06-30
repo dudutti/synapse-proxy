@@ -156,6 +156,20 @@ func streamResponse(
 		cacheableResponse = fullResponse
 	}
 
+	// Anthropic-shape response -> OpenAI-shape response. When the
+	// proxy forwarded via /anthropic/v1/messages the upstream replies
+	// in Anthropic message format; we translate it back to the
+	// OpenAI chat-completion shape that callers expect.
+	if provider == "minimax-anthropic" {
+		now := time.Now().Unix()
+		translated, tErr := optiagent.AnthropicToOpenAI(cacheableResponse, now, clientModel)
+		if tErr != nil {
+			log.Printf("[streamResponse] Anthropic->OpenAI translation failed on vk=%s: %v (forwarding raw response)", vk, tErr)
+		} else {
+			cacheableResponse = translated
+		}
+	}
+
 	// L0 capture: hand the upstream response back to ProxyHandler so it
 	// can publish it for in-flight coalescing followers. Only valid JSON
 	// (not upstream errors) is propagated.

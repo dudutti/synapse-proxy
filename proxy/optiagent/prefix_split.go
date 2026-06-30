@@ -304,10 +304,23 @@ func findArrayOpen(raw []byte, keyEnd int) (int, error) {
 // second-to-last, n=3 means the third-to-last, etc.
 //
 // The scan walks the array, tracking depth. Each top-level
-// element is identified by the byte where its opening '{' or
-// '[' starts. We keep a sliding window of the last N message
-// starts and return the oldest one in the window after we've
-// finished the scan.
+// element is identified by the byte where its opening '{' starts.
+// We keep a sliding window of the last N message starts and
+// return the oldest one in the window after we've finished the
+// scan.
+//
+// BUG FIX (re: tool_calls): an assistant message can have a
+// `tool_calls` field whose value is an array of {id, type, function}
+// objects. Naive counting would treat each tool_call dict and
+// each tool_calls array as a top-level element, producing a wrong
+// split offset (and a "tail does not end with ']}'" downstream
+// error). The fix is to count ONLY object elements at the
+// messages-array depth — i.e. we increment the message counter
+// and record the window only on '{' at depth=1, and we never
+// treat '[' at depth=2 as a message. Closing braces bring us back
+// to depth=1 but only the closing '}' that brings us back from
+// depth=2 (the message body) closes a message; the closing '}'
+// of a nested tool_call returns us from depth=3 to depth=2.
 func findNthToLastMessageStart(raw []byte, arrOpen int, n int) (int, int, error) {
 	if n < 1 {
 		return 0, 0, fmt.Errorf("findNthToLastMessageStart: n must be >= 1, got %d", n)
@@ -316,40 +329,42 @@ func findNthToLastMessageStart(raw []byte, arrOpen int, n int) (int, int, error)
 	depth := 1       // we are inside the messages array
 	count := 0
 	// window holds the start offsets of the most recent n
-	// elements. We push a new offset on each new top-level
-	// element and trim the slice to n entries.
+	// message objects. We push on every top-level '{' and trim
+	// the slice to n entries.
 	window := make([]int, 0, n+1)
 
 	for i < len(raw) {
 		c := raw[i]
 		if depth == 0 {
-			// We've closed the array. Done.
+			// We've closed the messages array. Done.
 			break
 		}
 		switch c {
 		case '[':
-			depth++
-			if depth == 2 {
-				// Top-level array element. Record and
-				// trim to n.
-				window = append(window, i)
-				if len(window) > n {
-					window = window[len(window)-n:]
-				}
+			// Nested arrays (tool_calls inside an assistant
+			// message, or any other array value inside a
+			// message body). They do NOT count as messages.
+			if depth >= 1 {
+				depth++
 			}
 		case '{':
-			if depth == 1 {
-				// Top-level message. Record and trim.
+			depth++
+			if depth == 2 {
+				// depth went 1 -> 2, meaning we just
+				// entered a top-level message object.
+				// Record its start and trim the window.
 				window = append(window, i)
 				if len(window) > n {
 					window = window[len(window)-n:]
 				}
 			}
-			depth++
 		case '}', ']':
 			depth--
-			if depth == 1 {
-				// End of a top-level message.
+			if depth == 1 && c == '}' {
+				// depth went 2 -> 1 on a closing brace,
+				// meaning we just left a top-level message
+				// object body. Increment the message
+				// counter.
 				count++
 			}
 		}
@@ -421,19 +436,94 @@ func CompressPayloadCachePreserving(payload []byte) ([]byte, error) {
 	//
 	// The tail ends with the byte sequence `...}]}`. The last
 	// `]}` closes the messages array and the root object in
-	// that order.
-	if len(split.TailJSON) < 2 ||
-		split.TailJSON[len(split.TailJSON)-2] != ']' ||
-		split.TailJSON[len(split.TailJSON)-1] != '}' {
-		return nil, errors.New("CompressPayloadCachePreserving: tail does not end with ']}' (bug in splitter)")
+	// that order — IN THE CANONICAL OpenAI payload where the
+	// messages array is the LAST field of the root object.
+//
+// In our proxy's wrapped payload, the InjectCompactionHint
+// round-trip (Go json.Marshal on a struct with both Messages
+// and System fields) ALWAYS emits the `system` field after the
+// messages array, even when System is "". So the real tail ends
+// with `],"system":""}` — the `]` that closes the messages
+// array is NOT at position len-2 anymore.
+//
+// Fix: locate the `]` that closes the messages array (the
+// only top-level `[` whose depth comes back to 0 inside the
+// tail) by re-scanning from the end of the prefix. Everything
+// after that `]` and before the next `,` or `}` is trailing
+// root-object fields; we strip them and re-attach them after
+// compression.
+//
+// The trailing root field is detected by scanning
+// forward from arrOpen. Anything between the closing `]` of
+// the messages array and the final `}` of the root object is
+// the trailing fields block, e.g. `,"system":""`. We split
+// the tail into:
+//   - tailMessageBytes: the message list (with its closing `]`)
+//   - trailingRoot: the trailing fields, beginning with `,`
+//                    (the comma between messages and the next
+//                    field), or empty if there is no trailing
+//                    field.
+	if len(split.TailJSON) < 2 {
+		return nil, errors.New("CompressPayloadCachePreserving: tail too short")
 	}
-	// Drop the trailing `]}`: the message list now ends one
-	// byte before the messages array close.
-	tailMessages := split.TailJSON[:len(split.TailJSON)-2]
+	// Scan the tail forward from the prefix boundary to find
+	// the `]` that closes the messages array. The messages
+	// array starts at the byte immediately after the comma in
+	// the prefix (which is the first byte of the tail).
+	tailArrOpen := bytes.IndexByte(split.TailJSON, '[')
+	if tailArrOpen < 0 {
+		return nil, errors.New("CompressPayloadCachePreserving: tail has no '[' (bug in splitter)")
+	}
+	// Walk depth to find the matching `]`.
+	depth := 1
+	arrClose := -1
+	i := tailArrOpen + 1
+	for i < len(split.TailJSON) {
+		c := split.TailJSON[i]
+		switch c {
+		case '[':
+			depth++
+		case ']':
+			depth--
+			if depth == 0 {
+				arrClose = i
+			}
+		}
+		i++
+		if arrClose >= 0 {
+			break
+		}
+	}
+	if arrClose < 0 {
+		return nil, errors.New("CompressPayloadCachePreserving: messages array not closed in tail")
+	}
+	// Everything after arrClose is trailing root fields plus
+	// the closing `}` of the root object.
+	trailing := split.TailJSON[arrClose+1:]
+	if len(trailing) == 0 || trailing[len(trailing)-1] != '}' {
+		return nil, fmt.Errorf("CompressPayloadCachePreserving: tail after messages ']' does not end with '}' (bug); trailing=%q", trailing)
+	}
+	// Stash the trailing block so the caller can re-attach it
+	// after compression. We pass it back via the error return is
+	// not workable; instead we extend the TailJSON semantics
+	// by appending a marker that the wrapper below recognises.
+	// (Cleaner approach: refactor CompressPayloadCachePreserving
+	// to handle the trailing block inline. We do that inline
+	// here.)
+	_ = trailing // marker for the inline handling below
+	// Build the message list to compress. We cut the tail at
+	// arrClose (the `]` that closes the messages array) and drop
+	// the trailing root fields. Drop the leading comma on the
+	// tail so the envelope parses cleanly.
+	tailMessages := split.TailJSON[:arrClose+1]
 	if len(tailMessages) > 0 && tailMessages[0] == ',' {
-		// Drop the leading comma so the envelope parses cleanly.
 		tailMessages = tailMessages[1:]
 	}
+	// Strip the trailing `]` from tailMessages so we can wrap
+	// them in our own envelope. (CompressPayload doesn't care
+	// about the array close — it walks the messages list
+	// directly via JSON unmarshal.)
+	tailMessages = tailMessages[:len(tailMessages)-1]
 	envelope := make([]byte, 0, len(tailMessages)+32)
 	envelope = append(envelope, []byte(`{"messages":[`)...)
 	envelope = append(envelope, tailMessages...)
@@ -458,15 +548,12 @@ func CompressPayloadCachePreserving(payload []byte) ([]byte, error) {
 	}
 	compressedMessages := inner[:len(inner)-2]
 
-	// Concatenate. The prefix ends at the closing '}' of the
-	// message just before the second-to-last. The tail was
-	// originally `,<message2>,<message3>]}` — we extracted
-	// the message objects only, so we re-attach `]}` plus the
-	// implicit `,` between prefix and tail (which is already
-	// in the prefix).
-	out := make([]byte, 0, len(split.PrefixJSON)+len(compressedMessages)+2)
+	// Concatenate: prefix + (leading comma from prefix +
+	// compressed messages) + trailing root fields.
+	out := make([]byte, 0, len(split.PrefixJSON)+len(compressedMessages)+len(trailing)+2)
 	out = append(out, split.PrefixJSON...)
 	out = append(out, compressedMessages...)
-	out = append(out, ']', '}')
+	// Re-attach the trailing root fields (e.g. `,"system":""`).
+	out = append(out, trailing...)
 	return out, nil
 }

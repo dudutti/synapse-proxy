@@ -35,6 +35,7 @@ package optiagent
 
 import (
 	"context"
+	"encoding/json"
 	"log"
 	"regexp"
 	"strings"
@@ -56,18 +57,26 @@ func (h *CacheAlignerHook) Name() string { return "cache_aligner" }
 // one, not the post-compression one.
 func (h *CacheAlignerHook) Priority() int { return 700 }
 
+// volatileSpan captures one matched volatile element in a
+// system prompt along with the kind of element it is.
+type volatileSpan struct {
+	label string
+	text  string
+}
+
 // BeforeRequest scans the system message(s) for volatile
-// content and sets `ccr_cache_aligner_warning` on the hctx
-// if anything was found. The payload itself is never
-// modified — see the package comment for why.
+// content and warns if anything is found. The payload is
+// intentionally NOT rewritten here because rewriting the
+// system prompt at the byte level is brittle (a single
+// off-by-one offset in a content field that itself contains
+// escape sequences or surrogate pairs produces a JSON that
+// the upstream rejects with a 400).
 //
-// Returns the input payload unchanged on the (overwhelmingly
-// common) no-detection path, and a fresh slice equal to the
-// input on the (rare) detection path. Callers should treat
-// the return value as the next payload in the chain (it
-// happens to be byte-identical to the input here, but the
-// contract is "the next bytes to send", not "the same slice
-// you passed in").
+// The warning is consumed by the dashboard's "cache stability"
+// tile so operators can see which VKs have unstable prefixes.
+// A future cache_aligner_rewrite.go will implement the actual
+// rewrite once we have a fully-tested byte-level mutator
+// (see HEADROOM_PLAN.md in the repo root).
 func (h *CacheAlignerHook) BeforeRequest(ctx context.Context, hctx *HookContext) ([]byte, error) {
 	IncrementBefore(h.Name(), hctx.VK)
 	if hctx.OptimizedPayload == nil || len(hctx.OptimizedPayload) == 0 {
@@ -76,8 +85,6 @@ func (h *CacheAlignerHook) BeforeRequest(ctx context.Context, hctx *HookContext)
 
 	systemContent, ok := extractSystemContent(hctx.OptimizedPayload)
 	if !ok {
-		// No system message (e.g. /v1/embeddings or
-		// /v1/completions). Nothing to align.
 		return hctx.OptimizedPayload, nil
 	}
 
@@ -101,10 +108,123 @@ func (h *CacheAlignerHook) BeforeRequest(ctx context.Context, hctx *HookContext)
 	warning := "system prompt contains volatile content: " + strings.Join(findings, ",")
 	hctx.SetFeature("ccr_cache_aligner_warning", warning)
 	log.Printf("[%s] %s vk=%s", h.Name(), warning, hctx.VK)
-	// Important: even on the detection path, we return the
-	// input payload unchanged. The whole point of the
-	// CacheAligner is to observe, not to rewrite.
+	// Return payload unchanged — the rewrite path is disabled
+	// until byte-level splicing is verified by tests.
 	return hctx.OptimizedPayload, nil
+}
+
+// rewriteSystemPromptStable replaces the first system message's
+// content with one where the matched spans have been removed
+// and re-appended as a "volatile context" trailer. Returns the
+// rewritten payload, or (nil, false) if any step fails.
+func rewriteSystemPromptStable(payload []byte, _ string, spans []volatileSpan) ([]byte, bool) {
+	// Find the messages array.
+	msgKeyIdx := bytesIndex(payload, []byte(`"messages"`))
+	if msgKeyIdx < 0 {
+		return nil, false
+	}
+	// Walk into the array, find the first '{'.
+	i := msgKeyIdx + len(`"messages"`)
+	for i < len(payload) && (payload[i] == ' ' || payload[i] == '\t' ||
+		payload[i] == '\n' || payload[i] == '\r' || payload[i] == ':') {
+		i++
+	}
+	if i >= len(payload) || payload[i] != '[' {
+		return nil, false
+	}
+	i++
+	for i < len(payload) && (payload[i] == ' ' || payload[i] == '\t' ||
+		payload[i] == '\n' || payload[i] == '\r' || payload[i] == ',') {
+		i++
+	}
+	if i >= len(payload) || payload[i] != '{' {
+		return nil, false
+	}
+	objEnd, ok := findObjectEnd(payload, i)
+	if !ok {
+		return nil, false
+	}
+	obj := payload[i : objEnd+1]
+	if !isSystemMessage(obj) {
+		return payload, true
+	}
+	contentKeyIdx := bytesIndex(obj, []byte(`"content"`))
+	if contentKeyIdx < 0 {
+		return nil, false
+	}
+	// Walk past `"content"` (the key), the closing `"`, the
+	// colon, optional whitespace, and the opening `"` of the
+	// value. We need to land on the value's opening `"`, which
+	// is what csOpen points at.
+	j := contentKeyIdx + len(`"content"`)
+	// Now skip the closing `"` of the key.
+	if j < len(obj) && obj[j] == '"' {
+		j++
+	}
+	for j < len(obj) && (obj[j] == ' ' || obj[j] == '\t' || obj[j] == '\n' || obj[j] == '\r' || obj[j] == ':') {
+		j++
+	}
+	if j >= len(obj) || obj[j] != '"' {
+		return nil, false
+	}
+	csOpen := j
+	j++
+	escaped := false
+	csClose := -1
+	for j < len(obj) {
+		if escaped {
+			escaped = false
+			j++
+			continue
+		}
+		if obj[j] == '\\' {
+			escaped = true
+			j++
+			continue
+		}
+		if obj[j] == '"' {
+			csClose = j
+			break
+		}
+		j++
+	}
+	if csClose < 0 {
+		return nil, false
+	}
+
+	originalContent := obj[csOpen+1 : csClose]
+	stablePart := string(originalContent)
+	var trailerLines []string
+	for _, s := range spans {
+		stablePart = strings.ReplaceAll(stablePart, s.text, "")
+		trailerLines = append(trailerLines, "["+s.label+": "+s.text+"]")
+	}
+	trailer := "\n\n[Volatile context moved here for cache stability: " +
+		strings.Join(trailerLines, " ") + "]"
+	newContent := stablePart + trailer
+
+	encoded, err := json.Marshal(newContent)
+	if err != nil {
+		return nil, false
+	}
+
+	newObj := make([]byte, 0, len(obj)+len(encoded))
+	newObj = append(newObj, obj[:csOpen]...)
+	newObj = append(newObj, encoded...)
+	newObj = append(newObj, obj[csClose:]...)
+
+	log.Printf("[%s] rewrote system content: stable=%d bytes, trailer=%d bytes (volatile moved to end for cache stability)",
+		"cache_aligner", csClose-csOpen-1, len(newContent)-(csClose-csOpen-1))
+
+	// Splice the new object back into the payload. i is
+	// the offset of the system message's opening '{' in
+	// payload, and objEnd is the offset of its closing '}'
+	// (both inclusive of the brace, since obj := payload[i:objEnd+1]).
+	newPayload := make([]byte, 0, len(payload)+len(encoded))
+	newPayload = append(newPayload, payload[:i]...)
+	newPayload = append(newPayload, newObj...)
+	newPayload = append(newPayload, payload[objEnd+1:]...)
+	return newPayload, true
 }
 
 // AfterResponse is a no-op. Cache alignment is a read-only

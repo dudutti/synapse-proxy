@@ -7,6 +7,55 @@ import (
 	"strings"
 )
 
+// todoListSignatures is the set of substrings that, when present in
+// a tool result body, mark it as a todo / task list the agent
+// iterates on. We must NOT truncate these (Hermes-style agents lose
+// their plan visibility past turn 3 and start hallucinating tasks).
+//
+// Format-agnostic: the agent SDK can serialise a Todo as
+//   [{"id":"1","content":"…","status":"in_progress"},{"id":"2",…}]
+// or as a Markdown checkbox list, or as plain text with leading
+// "- [ ]" / "- [x]". We match on a few canonical anchors that
+// cover all three.
+var todoListSignatures = []string{
+	`"status":"pending"`,
+	`"status":"in_progress"`,
+	`"status":"completed"`,
+	`"status":"todo"`,
+	`"status":"done"`,
+	`"todos":`,
+	`"tasks":`,
+	`"checklist":`,
+	`"todoList":`,
+	`- [ ]`,
+	`- [x]`,
+	`* [ ]`,
+	`* [x]`,
+}
+
+// looksLikeTodoList returns true when the body looks like an
+// agent's todo / task list that must be preserved verbatim. We
+// intentionally err on the safe side: false positives are harmless
+// (we just skip the truncation pass), false negatives corrupt the
+// agent's plan and are catastrophic.
+func looksLikeTodoList(content string) bool {
+	if content == "" {
+		return false
+	}
+	// Trim only the very edge whitespace; the signatures we look
+	// for are usually in the first ~200 chars.
+	head := content
+	if len(head) > 512 {
+		head = head[:512]
+	}
+	for _, sig := range todoListSignatures {
+		if strings.Contains(head, sig) {
+			return true
+		}
+	}
+	return false
+}
+
 type ChatMessage struct {
 	Role    string      `json:"role"`
 	Content string      `json:"content"`
@@ -121,7 +170,17 @@ func CompressPayload(payload []byte) ([]byte, error) {
 		// to use the result. We must keep the *shape* of the original
 		// content and only shrink it.
 		if role == "tool" || role == "function" {
-			if !isRecentMessage && hasContent && len(contentStr) > 200 {
+			// TODO-LIST / TASK-LIST carve-out. Hermes and similar
+			// multi-turn agents store their plan in the result of
+			// read_todos / write_todo / TodoWrite tool calls and re-read
+			// it on every turn. Truncating those breaks plan visibility
+			// past turn 3 and makes the agent hallucinate already-done
+			// steps. We detect todo-list payloads by signature and skip
+			// both the length truncation and the "drop repeated results"
+			// pass below.
+			isTodo := looksLikeTodoList(contentStr)
+
+			if !isTodo && !isRecentMessage && hasContent && len(contentStr) > 200 {
 				// Keep the first N chars + a trailing ellipsis.
 				const keep = 200
 				if len(contentStr) > keep+50 {
@@ -149,10 +208,13 @@ func CompressPayload(payload []byte) ([]byte, error) {
 
 			if name == lastToolName && name != "" {
 				consecutiveToolCount++
-				// Drop repeated tool results beyond the first 2 â€” just
+				// Drop repeated tool results beyond the first 2 â€" just
 				// replace with a minimal valid JSON that the agent can
 				// parse without flagging as injection.
-				if consecutiveToolCount > 2 && !isRecentMessage {
+				// Skip if this run is a todo-list (see todo carve-out
+				// above): the agent's plan lives here and dropping it
+				// silently is a correctness bug, not a token-saving win.
+				if !isTodo && consecutiveToolCount > 2 && !isRecentMessage {
 					msg["content"] = ""
 				}
 			} else {

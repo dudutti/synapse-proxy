@@ -38,11 +38,25 @@ func (h *AnthropicCacheHook) BeforeRequest(ctx context.Context, hctx *HookContex
 		return nil, nil
 	}
 
-	// 1. Detect if target model is Anthropic / Claude
-	var modelCheck struct {
-		Model string `json:"model"`
+	// 1. Decide if this request is going to an Anthropic-compatible
+	// upstream. We prefer hctx.Provider (set by the proxy from the
+	// virtual key's config), which is authoritative even when the
+	// client sends a generic model name like "gpt-4o-mini" that
+	// the proxy then re-stamps upstream. We fall back to sniffing
+	// the payload's `model` field for cases where the hook runs
+	// outside the proxy pipeline (e.g. a direct SDK user).
+	isAnthropic := strings.EqualFold(hctx.Provider, "anthropic") ||
+		strings.EqualFold(hctx.Provider, "claude")
+	if !isAnthropic {
+		var modelCheck struct {
+			Model string `json:"model"`
+		}
+		if err := json.Unmarshal(payload, &modelCheck); err == nil &&
+			strings.Contains(strings.ToLower(modelCheck.Model), "claude") {
+			isAnthropic = true
+		}
 	}
-	if err := json.Unmarshal(payload, &modelCheck); err != nil || !strings.Contains(strings.ToLower(modelCheck.Model), "claude") {
+	if !isAnthropic {
 		return payload, nil
 	}
 
@@ -128,7 +142,8 @@ func (h *AnthropicCacheHook) BeforeRequest(ctx context.Context, hctx *HookContex
 	if modified {
 		newPayload, err := json.Marshal(requestMap)
 		if err == nil {
-			log.Printf("[AnthropicCache] successfully injected ephemeral cache_control tags for model %s", modelCheck.Model)
+			log.Printf("[AnthropicCache] successfully injected ephemeral cache_control tags for provider=%s model=%s",
+				hctx.Provider, hctx.Model)
 			return newPayload, nil
 		}
 	}
