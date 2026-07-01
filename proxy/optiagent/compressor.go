@@ -124,7 +124,11 @@ func CompressPayload(payload []byte) ([]byte, error) {
 		}
 
 		name, _ := msg["name"].(string)
-		isRecentMessage := i >= msgCount-2
+		// isRecentMessage: only the LAST assistant message is
+		// preserved verbatim so the agent can see its own most
+		// recent reasoning. Earlier thinking blocks and tool
+		// outputs are stripped.
+		isRecentMessage := i >= msgCount-1
 
 		// 1. Hermes / Claude Chain-of-Thought Pruning
 		if role == "assistant" && !isRecentMessage && hasContent {
