@@ -1,20 +1,17 @@
 // Package optiagent — BytePreservingCompressorHook.
 //
 // Wires the existing CompressPayload() (Unmarshal + agent-aware
-// rules + re-Marshal) into the BeforeRequest hook pipeline so
-// that long multi-turn agent trajectories actually see their
-// stale <thinking> blocks, oversized tool outputs, and repeated
+// rules + re-Marshal) into the BeforeRequest hook chain so that
+// long multi-turn agent trajectories actually see their stale
+// <thinking> blocks, oversized tool outputs, and repeated
 // same-name tool results compressed.
 //
-// Why "byte-preserving" is in the name even though the marshal
-// is not byte-identical to the input: the SHAPE of the
-// compressed payload is what the upstream LLM sees, and that
-// shape becomes byte-stable from turn 2 onwards (same agent
-// prompt, same tool sequence). That is what the provider cache
-// (Anthropic cache_control, MiniMax cache-read, OpenAI
-// automatic) keys off of. See the marshal-deterministic
-// encoder in marshal_deterministic.go for the key-order
-// guarantees that make the cache hit possible.
+// CRITICAL: priority 100 — BEFORE CCR Compress (740) and CCR
+// Retrieve (750). This is the key fix: the byte-preserving hook
+// must run first so the compressed payload is the one we hash
+// for L1/L2 cache lookups. If it runs AFTER CCR Retrieve, the
+// retrieve hook short-circuits with the un-compressed hash, and
+// the dashboard's L3 row shows Orig==Opt with $0 saved.
 package optiagent
 
 import (
@@ -22,24 +19,19 @@ import (
 	"log"
 )
 
-// BytePreservingCompressorHook runs CompressPayload on the
-// incoming payload and records per-hook savings. It is the
-// single integration point that actually wires the L3 rules
-// (thinking-block stripping, tool-output truncation, repeated
-// tool result blanking, todo-list carve-out) into the proxy
-// hot path. Without it, none of the rules in compressor.go fire.
+// BytePreservingCompressorHook is the integration point that
+// actually wires the L3 rules (thinking-block stripping, tool-
+// output truncation, repeated tool result blanking, todo-list
+// carve-out) into the proxy hot path.
 type BytePreservingCompressorHook struct{}
 
 // Name returns the hook name used in metrics and log lines.
-func (h *BytePreservingCompressorHook) Name() string {
-	return "byte_preserving_compressor"
-}
+func (h *BytePreservingCompressorHook) Name() string { return "byte_preserving_compressor" }
 
-// Priority runs after CCR Compress (740) and before CCR
-// Retrieve (750), so the LLM-hash cache key is computed on
-// the compressed payload (not the raw one) and L1 hit rates
-// stay meaningful.
-func (h *BytePreservingCompressorHook) Priority() int { return 745 }
+// Priority is 100 — before CCR Compress (740) and CCR Retrieve
+// (750). The byte-preserving compressor must run first so the
+// L1 cache key is computed on the compressed payload.
+func (h *BytePreservingCompressorHook) Priority() int { return 100 }
 
 // IsEnabled returns true. The hook is always-on; it falls
 // through to the original payload on parse error.
@@ -79,7 +71,9 @@ func (h *BytePreservingCompressorHook) BeforeRequest(ctx context.Context, hctx *
 	return compressed, nil
 }
 
-// AfterResponse is a no-op.
+// AfterResponse is a no-op. Compression is request-side only;
+// the response shape is converted by AnthropicToOpenAI inside
+// stream.go, not here.
 func (h *BytePreservingCompressorHook) AfterResponse(ctx context.Context, hctx *HookContext) ([]byte, error) {
 	IncrementAfter(h.Name(), hctx.VK)
 	return nil, nil
@@ -87,5 +81,5 @@ func (h *BytePreservingCompressorHook) AfterResponse(ctx context.Context, hctx *
 
 func init() {
 	RegisterHook(&BytePreservingCompressorHook{})
-	log.Printf("[hooks] registered BytePreservingCompressorHook at priority 745")
+	log.Printf("[hooks] registered BytePreservingCompressorHook at priority 100 (before CCR Compress and Retrieve)")
 }

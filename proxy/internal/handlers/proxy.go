@@ -788,7 +788,22 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 				resp.Body.Close()
 			}
 		}
-		
+
+		// Telemetry: log the L3 savings even when the upstream
+		// returned a 4xx/5xx. Without this, the L3 byte-preserving
+		// savings are invisible in the dashboard for any request
+		// that the upstream rejects (e.g. 400 from a payload
+		// mismatch after a tool_call_id reshuffle). The hook has
+		// already compressed the payload; we just need to record
+		// the savings so the operator can see the compression
+		// actually ran.
+		go workers.PushTelemetry(virtualKey, provider, reqModel,
+			optResult.PromptTokensOrig, 0, optResult.PromptTokensOpt, 0, 0,
+			"L3", time.Since(startTime), string(bodyBytes), string(optResult.Payload), errBody,
+			0, 0, 0, 0, agentSig.ID, agentSig.Label, sessionID, zeroLog,
+			toolCallsStr, keyConfig.LimitExceeded, true,
+			turnCount, convSignature, workers.BuildPerHookSavingsJSON(hctx))
+
 		log.Printf("All upstream providers failed. Last error: %v, Status: %d, Body: %s", reqErr, status, errBody)
 		
 		w.Header().Set("Content-Type", "application/json")
