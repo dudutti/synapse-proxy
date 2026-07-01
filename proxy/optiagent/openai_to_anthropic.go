@@ -9,6 +9,7 @@ package optiagent
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 )
 
 type chatCompletionReq struct {
@@ -111,7 +112,12 @@ func OpenAIToAnthropic(payload []byte, modelRemap string) ([]byte, error) {
 	if out.MaxTokens <= 0 {
 		out.MaxTokens = 4096
 	}
-	return json.Marshal(out)
+	b, err := json.Marshal(out)
+	if err != nil {
+		return nil, fmt.Errorf("OpenAIToAnthropic: marshal: %w", err)
+	}
+	log.Printf("[translator] model=%s, tools=%d, messages=%d, body=%s", out.Model, len(out.Tools), len(out.Messages), string(b))
+	return b, nil
 }
 
 func translateAnthropicMessage(role string, content interface{}, msg map[string]interface{}) (map[string]interface{}, bool) {
@@ -160,14 +166,34 @@ func translateAnthropicMessage(role string, content interface{}, msg map[string]
 					continue
 				}
 				fn, _ := call["function"].(map[string]interface{})
-				argsStr, _ := fn["arguments"].(string)
 				idStr, _ := call["id"].(string)
 				nameStr, _ := fn["name"].(string)
+				// arguments can be either a JSON string (legacy
+				// OpenAI format) or a Go object (newer OpenAI
+				// format). Anthropic expects a raw JSON object,
+				// so we re-marshal on both paths.
+				var argsRaw json.RawMessage
+				switch v := fn["arguments"].(type) {
+				case string:
+					if v != "" {
+						argsRaw = json.RawMessage(v)
+					}
+				case map[string]interface{}:
+					if b, err := json.Marshal(v); err == nil {
+						argsRaw = b
+					}
+				case nil:
+					argsRaw = json.RawMessage(`{}`)
+				default:
+					if b, err := json.Marshal(v); err == nil {
+						argsRaw = b
+					}
+				}
 				blocks = append(blocks, map[string]interface{}{
 					"type":  "tool_use",
 					"id":    idStr,
 					"name":  nameStr,
-					"input": json.RawMessage(argsStr),
+					"input": argsRaw,
 				})
 			}
 			if len(blocks) > 0 {
