@@ -30,9 +30,20 @@ services:
   redis:
     image: redis/redis-stack-server:latest
     container_name: optitoken-redis
+    # SECURITY: Redis MUST NOT be exposed to the public internet.
+    # The proxy and dashboard reach it over the internal Docker
+    # network (172.18.0.0/16) via the container hostname
+    # 'optitoken-redis'. By default Redis Stack binds to 0.0.0.0
+    # (all interfaces); we explicitly bind to a non-routable
+    # address within the container's network namespace so the
+    # service is reachable from sibling containers but cannot
+    # bind to the host's external interfaces even if a future
+    # port mapping is added by mistake. The 127.0.0.1 inside a
+    # container is the loopback within the container's own
+    # network namespace, not the host loopback.
     command: >
       sh -c "
-        redis-stack-server --bind 0.0.0.0 --protected-mode yes --requirepass $${REDIS_PASSWORD} --appendonly yes
+        redis-stack-server --bind 127.0.0.1 --protected-mode yes --requirepass $${REDIS_PASSWORD} --appendonly yes
       "
     environment:
       - REDIS_PASSWORD=${REDIS_PASSWORD}
