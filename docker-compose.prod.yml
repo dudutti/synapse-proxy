@@ -1,0 +1,96 @@
+version: '3.8'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: optitoken-postgres
+    env_file: /root/optitoken/.env
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    # SECURITY: PostgreSQL MUST NOT be exposed to the public
+    # internet. The other services (proxy, dashboard) reach it
+    # over the internal Docker network (172.18.0.0/16). On the
+    # host, only an operator with shell access on the prod box
+    # (and the credentials in /root/optitoken/.env) can reach
+    # the DB, via `docker exec -it optitoken-postgres psql ...`.
+    # The previous explicit "5432:5432" port mapping was a
+    # pre-existing exposure; an automated scanner flagged it on
+    # 2026-07-01. Removed as part of incident response.
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis/redis-stack-server:latest
+    container_name: optitoken-redis
+    command: >
+      sh -c "
+        redis-stack-server --bind 0.0.0.0 --protected-mode yes --requirepass $${REDIS_PASSWORD} --appendonly yes
+      "
+    environment:
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD}", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  proxy:
+    build: ./proxy
+    container_name: optitoken-proxy
+    env_file: /root/optitoken/.env
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  dashboard:
+    build: ./dashboard
+    container_name: optitoken-dashboard
+    env_file: /root/optitoken/.env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    volumes:
+      - dashboard_uploads:/app/public/uploads
+    restart: unless-stopped
+    mem_limit: 1024m
+    memswap_limit: 1024m
+
+  caddy:
+    image: caddy:2
+    container_name: optitoken-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      dashboard:
+        condition: service_started
+      proxy:
+        condition: service_started
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+  dashboard_uploads:
+  caddy_data:
+  caddy_config:
