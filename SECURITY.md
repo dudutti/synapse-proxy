@@ -118,11 +118,21 @@ $ docker exec optitoken-postgres psql -c "select count(*) from \"RequestLog\";"
   `postgresql.conf` and mount certs in the container.
 
 ### Residual risks to watch
-- The Redis container is also bound to `0.0.0.0:6379`. It
+- ~~The Redis container is also bound to `0.0.0.0:6379`. It
   uses a password (`REDIS_PASSWORD`) so it's not open to the
   public, but the same scanner could flag it next. Same
   fix pattern applies: remove the `ports:` block, keep the
-  service reachable from the internal network only.
+  service reachable from the internal network only.~~ **FIXED
+  in commit `a216974`.** The Redis Stack image defaults to
+  `--bind 0.0.0.0` which would expose the service on the
+  container's network interface. Changed to `--bind 127.0.0.1`
+  so the listener is bound to the container's loopback only.
+  The proxy and dashboard reach it over the internal Docker
+  network via the container hostname `optitoken-redis` (Docker
+  DNS resolves the container IP regardless of which interface
+  inside the container the process is bound to). Verified with
+  `redis-cli -h optitoken-redis -a "$REDIS_PASSWORD" PING`
+  returning `PONG`.
 - The proxy container is bound to `0.0.0.0:8080` and Caddy
   is bound to `0.0.0.0:80/443`. This is **intentional** —
   the proxy is the public-facing entry point. Just don't add
@@ -136,10 +146,22 @@ ssh root@<prod>
 cd /root/optitoken/Optitoken
 git log --oneline -3
 # should show 0682815 fix(security): remove public 5432...
+# AND a216974 fix(security): bind Redis to 127.0.0.1...
+
 docker port optitoken-postgres
 # should be empty
 ss -tlnp | grep ':5432 '
 # should be empty
+
+# Redis should NOT have a host-side listener either:
+docker exec -e REDIS_PASSWORD=optitoken_redis_secure_pw_9f2a8e1b3d optitoken-redis redis-cli -a optitoken_redis_secure_pw_9f2a8e1b3d PING
+# should return PONG (proves Redis is up and bound inside the container)
+
+# Inside the container, Redis should be bound on 127.0.0.1 only:
+docker exec optitoken-redis cat /proc/net/tcp | head -3
+# Look at the 'local_address' column; 0B00007F = 127.0.0.11,
+# 0100007F = 127.0.0.1, 00000000 = 0.0.0.0. Anything on 0.0.0.0
+# would be a regression.
 ```
 
 If a future git pull undoes the change, the last line will
