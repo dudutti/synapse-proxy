@@ -715,6 +715,20 @@ if loopResult.ShouldReuse && len(loopResult.ReusePayload) > 0 {
 			}
 		}
 
+		// NO TRANSLATION: minimax handles /v1/chat/completions
+		// in OpenAI format directly. The earlier translator code
+		// (OpenAIToAnthropic) was based on the assumption that
+		// minimax exposed /v1/messages — it does not. Forwarding
+		// the OpenAI-shape body as-is works, translating it
+		// produces a 400 'missing required parameter: model'
+		// from the /v1/chat/completions endpoint.
+		//
+		// The Anthropic-format translation code in
+		// proxy/optiagent/openai_to_anthropic.go is kept for
+		// forward compatibility (e.g. if we add a real Anthropic
+		// provider in the future) but is NOT invoked from this
+		// hot path.
+
 		req, err := http.NewRequest("POST", targetURL, bytes.NewBuffer(upstreamPayload))
 		if err != nil {
 			return nil, err
